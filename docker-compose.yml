@@ -1,0 +1,9 @@
+services:
+  controller:
+    build: .
+    container_name: awg-fleet
+    command: run
+    env_file: .env
+    volumes:
+      - ./state.json:/app/state.json
+    restart: unless-stopped

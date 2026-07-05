@@ -1,0 +1,36 @@
+[project]
+name = "awg-fleet"
+version = "0.1.0"
+description = "One AmneziaWG config, a whole fleet of servers behind it: health-checked, DNS-steered, auto-failover."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Radomir Aksenenko" }]
+keywords = ["amneziawg", "wireguard", "vpn", "failover", "load-balancing", "cloudflare"]
+dependencies = [
+    "cryptography>=42",
+    "asyncssh>=2.14",
+    "httpx>=0.25",
+    "typer>=0.12",
+    "qrcode[pil]>=7.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+awgfleet = "awgfleet.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["awgfleet*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
