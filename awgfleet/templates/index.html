@@ -232,15 +232,28 @@ async function clientModal(name){
       <div class="muted" style="font-size:12px;margin-top:8px">AmneziaWG app: scan the QR or import the .conf.</div>
     </div>
     <div id="cvpn" style="display:none">
-      <img class="qr" src="/api/clients/${encodeURIComponent(name)}/vpnqr?t=${Date.now()}" alt="QR"/>
-      <pre class="conf" id="cvpn2" style="max-height:120px">loading…</pre>
+      <div id="cvpnqrs" style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center;align-items:flex-start"><div class="muted">loading…</div></div>
+      <div class="muted" style="font-size:12px;margin-top:8px">AmneziaVPN: <b>+ → У меня есть данные для подключения → QR-код</b>, отсканируйте коды по очереди. Приложение соберёт их в один конфиг.</div>
+      <pre class="conf" id="cvpn2" style="max-height:120px;margin-top:10px">loading…</pre>
       <div class="rowbtns" style="margin-top:10px">
         <button class="btn" onclick="copyText('cvpn2')">Copy vpn:// link</button>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">AmneziaVPN app: scan the QR or paste the vpn:// link (one-tap import).</div>
     </div>`);
   api('GET','/api/clients/'+encodeURIComponent(name)+'/config').then(t=>{const el=$('#cconf');if(el)el.textContent=t});
   api('GET','/api/clients/'+encodeURIComponent(name)+'/vpn').then(t=>{const el=$('#cvpn2');if(el)el.textContent=t});
+  loadVpnSeries(name);
+}
+async function loadVpnSeries(name){
+  const box=$('#cvpnqrs');if(!box)return;
+  let n=1;
+  try{const r=await api('GET','/api/clients/'+encodeURIComponent(name)+'/vpnseries');n=r.count||1}catch(e){}
+  box.innerHTML='';
+  for(let i=0;i<n;i++){
+    const cell=document.createElement('div');cell.style.textAlign='center';
+    const cap=n>1?`<div class="muted" style="font-size:12px;margin-bottom:4px">QR ${i+1} / ${n}</div>`:'';
+    cell.innerHTML=cap+`<img class="qr" src="/api/clients/${encodeURIComponent(name)}/vpnqr/${i}?t=${Date.now()}" alt="QR ${i+1}"/>`;
+    box.appendChild(cell);
+  }
 }
 function cTab(btn,which){document.querySelectorAll('#modal .tab').forEach(t=>t.classList.remove('on'));btn.classList.add('on');
   $('#cstats').style.display=which==='stats'?'':'none';$('#cawg').style.display=which==='awg'?'':'none';$('#cvpn').style.display=which==='vpn'?'':'none'}

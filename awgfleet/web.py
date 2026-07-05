@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from .clients import add_client, qr_png, remove_client, vpn_uri
+from .clients import add_client, qr_png, remove_client, vpn_qr_series, vpn_uri
 from .models import Server
 from .provision import provision_server, push_config, teardown_server
 from .render import render_client_conf
@@ -243,3 +243,19 @@ async def client_vpn_qr(name: str):
     cfg = _load().config
     png = qr_png(vpn_uri(cfg, _find_client(cfg, name)), low_ec=True)
     return Response(png, media_type="image/png")
+
+
+@app.get("/api/clients/{name}/vpnseries")
+async def client_vpn_series(name: str):
+    """How many QR codes the AmneziaVPN import needs (the app reassembles them)."""
+    cfg = _load().config
+    return {"count": len(vpn_qr_series(cfg, _find_client(cfg, name)))}
+
+
+@app.get("/api/clients/{name}/vpnqr/{index}")
+async def client_vpn_qr_chunk(name: str, index: int):
+    cfg = _load().config
+    series = vpn_qr_series(cfg, _find_client(cfg, name))
+    if index < 0 or index >= len(series):
+        raise HTTPException(404, "chunk out of range")
+    return Response(series[index], media_type="image/png")

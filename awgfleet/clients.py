@@ -53,11 +53,10 @@ _AWG_KEYS = (
 )
 
 
-def vpn_uri(cfg: FleetConfig, client: Client) -> str:
-    """The Amnezia native `vpn://` URI for the AmneziaVPN app (as opposed to the
-    plain .conf the AmneziaWG app reads). Payload is the Amnezia container JSON,
-    qCompress-framed (4-byte big-endian length + zlib) and base64url-encoded,
-    matching what the desktop client emits."""
+def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
+    """The qCompress-framed Amnezia container JSON (4-byte big-endian length +
+    zlib), shared by the `vpn://` URI and the QR series. This is the exact byte
+    string the desktop client feeds into both its URL and its QR encoders."""
     import json
     import struct
     import zlib
@@ -100,8 +99,57 @@ def vpn_uri(cfg: FleetConfig, client: Client) -> str:
         "hostName": cfg.domain,
     }
     raw = json.dumps(payload, separators=(",", ":")).encode()
-    blob = struct.pack(">I", len(raw)) + zlib.compress(raw, 9)
-    return "vpn://" + base64.urlsafe_b64encode(blob).decode().rstrip("=")
+    return struct.pack(">I", len(raw)) + zlib.compress(raw, 9)
+
+
+def vpn_uri(cfg: FleetConfig, client: Client) -> str:
+    """The Amnezia native `vpn://` URI for the AmneziaVPN app (as opposed to the
+    plain .conf the AmneziaWG app reads): the compressed blob, base64url-encoded."""
+    return "vpn://" + base64.urlsafe_b64encode(_amnezia_blob(cfg, client)).decode().rstrip("=")
+
+
+# AmneziaVPN's multi-QR import format (client/core/utils/qrCodeUtils.cpp +
+# importController.cpp). The app splits the *compressed bytes* (not the vpn://
+# text) into slices; each QR carries a header the reader uses to reassemble:
+# a qint16 magic (1984), a quint8 total count, a quint8 index, then the slice
+# as a Qt QDataStream QByteArray (quint32 length prefix), serialized big-endian
+# and base64url-encoded. The reader keys slices by index and concatenates, so
+# slice size is free — Amnezia's own encoder caps it at 850, but a code that
+# full is dense and scans badly on a phone. We aim for ~600 bytes per code so a
+# typical config splits into two comfortably sparse codes; bigger configs get
+# more. Never exceed 850 (Amnezia's ceiling) and never emit fewer than one.
+_QR_MAGIC = 1984
+_QR_TARGET = 600  # desired bytes per code (well under Amnezia's 850 max)
+
+
+def vpn_qr_chunks(cfg: FleetConfig, client: Client) -> list[str]:
+    """The base64url payloads for an AmneziaVPN QR series (one string per code).
+
+    Split into balanced slices sized for reliable phone scanning; the AmneziaVPN
+    app reassembles them by index regardless of how we chunked."""
+    import math
+    import struct
+
+    data = _amnezia_blob(cfg, client)
+    total = max(1, math.ceil(len(data) / _QR_TARGET))
+    size = math.ceil(len(data) / total)  # balanced, so no single code is dense
+    chunks = []
+    for idx in range(total):
+        piece = data[idx * size : (idx + 1) * size]
+        frame = (
+            struct.pack(">h", _QR_MAGIC)  # qint16 magic, big-endian
+            + struct.pack(">B", total)  # quint8 chunk count
+            + struct.pack(">B", idx)  # quint8 chunk index
+            + struct.pack(">I", len(piece))  # QByteArray length prefix (quint32 BE)
+            + piece
+        )
+        chunks.append(base64.urlsafe_b64encode(frame).decode().rstrip("="))
+    return chunks
+
+
+def vpn_qr_series(cfg: FleetConfig, client: Client) -> list[bytes]:
+    """PNGs for the AmneziaVPN QR series: scan them in turn in the app to import."""
+    return [qr_png(c, low_ec=True) for c in vpn_qr_chunks(cfg, client)]
 
 
 def qr_png(text: str, low_ec: bool = False) -> bytes:
