@@ -29,6 +29,20 @@ if ! command -v awg-quick >/dev/null 2>&1; then
   echo "AWG-INSTALL-FAILED: amneziawg-tools not available (check distro / apt sources)" >&2
   exit 1
 fi
+# The kernel module must match the RUNNING kernel. A newer-but-unbooted kernel is
+# common (update installed, box not rebooted): DKMS then built for the wrong
+# version. Build for the running kernel instead of forcing a prod reboot.
+if ! modprobe amneziawg 2>/dev/null; then
+  apt-get install -y -qq "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
+  AWGVER=$(dkms status 2>/dev/null | grep -oiE 'amneziawg/[0-9.]+' | head -1)
+  [ -n "$AWGVER" ] && dkms install "$AWGVER" -k "$(uname -r)" >/dev/null 2>&1 || true
+  dkms autoinstall -k "$(uname -r)" >/dev/null 2>&1 || true
+  modprobe amneziawg 2>/dev/null || true
+fi
+if ! lsmod | grep -q '^amneziawg' && ! modprobe amneziawg 2>/dev/null; then
+  echo "AWG-MODULE-FAILED: amneziawg kernel module unavailable for $(uname -r)" >&2
+  exit 1
+fi
 mkdir -p /etc/amnezia/amneziawg
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
