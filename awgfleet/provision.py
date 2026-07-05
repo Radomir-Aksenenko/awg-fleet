@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .models import FleetConfig, Server
 from .render import render_server_conf
-from .ssh import run_ssh, upload_text
+from .ssh import run_ssh, upload_and_run
 
 REMOTE_CONF = "/etc/amnezia/amneziawg/awg0.conf"
 
@@ -62,17 +62,14 @@ async def push_config(server: Server, cfg: FleetConfig) -> None:
     tunnels, so adding a client is instant and does not kick anyone off. A fresh
     node with no interface yet gets the full `awg-quick up` (routes + PostUp)."""
     conf = render_server_conf(cfg)
-    await run_ssh(server, "mkdir -p /etc/amnezia/amneziawg")
-    await upload_text(server, REMOTE_CONF, conf)
-    await run_ssh(server, f"chmod 600 {REMOTE_CONF}")
-    await run_ssh(
-        server,
+    apply = (
+        f"chmod 600 {REMOTE_CONF}; "
         "if ip link show awg0 >/dev/null 2>&1; then "
         "awg-quick strip awg0 > /tmp/awg0.sync 2>/dev/null "
         "&& awg syncconf awg0 /tmp/awg0.sync; rm -f /tmp/awg0.sync; "
-        "else systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; awg-quick up awg0; fi",
-        timeout=90.0,
+        "else systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; awg-quick up awg0; fi"
     )
+    await upload_and_run(server, REMOTE_CONF, conf, apply, timeout=90.0)
 
 
 async def provision_server(server: Server, cfg: FleetConfig) -> None:
