@@ -1,9 +1,9 @@
-"""Web panel for awg-fleet: manage nodes and clients from a browser.
+"""Web panel for awg-fleet: manage nodes and clients, watch live metrics.
 
-Binds to localhost by design and is meant to sit behind a tunnel + access proxy
-(the same way the CLI expects), so it carries no auth of its own. Every mutation
-takes a lock, then load-modify-saves state.json atomically; the steering
-controller reloads that file each pass, so changes are picked up on their own.
+Binds to localhost and expects to sit behind a tunnel + access proxy, so it
+carries no auth of its own. Live rotation and per-node load come from the
+metrics DB that the controller writes each pass, so the panel stays fast and
+never has to SSH on a page refresh; only mutations touch the nodes.
 """
 
 from __future__ import annotations
@@ -17,16 +17,16 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 from .clients import add_client, qr_png, remove_client
-from .controller import decide_rotation
-from .health import probe
 from .models import Server
 from .provision import provision_server, push_config, teardown_server
 from .render import render_client_conf
 from .state import DEFAULT_STATE_PATH, State
+from .stats import StatsDB
 
 app = FastAPI(title="awg-fleet", docs_url=None, redoc_url=None)
 _lock = asyncio.Lock()
 _TEMPLATES = Path(__file__).parent / "templates"
+_stats = StatsDB()
 
 
 def _load() -> State:
@@ -50,27 +50,77 @@ async def index() -> str:
 @app.get("/api/status")
 async def status():
     cfg = _load().config
-    probes = list(await asyncio.gather(*(probe(s) for s in cfg.servers))) if cfg.servers else []
-    rotation = decide_rotation(cfg, probes)
+    rotation = _stats.get_meta("rotation", [])
+    load = _stats.get_meta("load", {})
+    alive = _stats.get_meta("alive", {})
+    servers = []
+    for s in cfg.servers:
+        servers.append(
+            {
+                "name": s.name,
+                "host": s.host,
+                "region": s.region,
+                "alive": alive.get(s.name),
+                "load": load.get(s.name),
+                "in_rotation": s.name in rotation,
+                "users": _stats.node_users(s.name),
+            }
+        )
+    clients = []
+    online = 0
+    for c in cfg.clients:
+        d = _stats.client_detail(c.public_key)
+        if d["online"]:
+            online += 1
+        clients.append(
+            {
+                "name": c.name,
+                "address": c.address,
+                "created_at": c.created_at,
+                "online": d["online"],
+                "rx": d["rx"],
+                "tx": d["tx"],
+                "last_seen": d["last_seen"],
+                "favorite": d["favorite"],
+            }
+        )
     return {
         "domain": cfg.domain,
         "port": cfg.listen_port,
-        "servers": [
-            {
-                "name": p.server.name,
-                "host": p.server.host,
-                "region": p.server.region,
-                "alive": p.alive,
-                "load": p.load,
-                "in_rotation": p.server.host in rotation,
-            }
-            for p in probes
-        ],
-        "clients": [
-            {"name": c.name, "address": c.address, "created_at": c.created_at}
-            for c in cfg.clients
-        ],
+        "servers": servers,
+        "clients": clients,
         "rotation": rotation,
+        "online": online,
+        "offline": len(clients) - online,
+    }
+
+
+@app.get("/api/overview")
+async def overview():
+    return {"series": _stats.overview_series()}
+
+
+@app.get("/api/clients/{name}/detail")
+async def client_detail(name: str):
+    cfg = _load().config
+    c = _find_client(cfg, name)
+    d = _stats.client_detail(c.public_key)
+    return {"name": c.name, "address": c.address, "created_at": c.created_at, **d}
+
+
+@app.get("/api/servers/{name}/detail")
+async def server_detail(name: str):
+    cfg = _load().config
+    s = next((x for x in cfg.servers if x.name == name), None)
+    if not s:
+        raise HTTPException(404, "no such server")
+    return {
+        "name": s.name,
+        "host": s.host,
+        "region": s.region,
+        "load": _stats.get_meta("load", {}).get(s.name),
+        "users": _stats.node_users(s.name),
+        "series": _stats.node_series(s.name),
     }
 
 

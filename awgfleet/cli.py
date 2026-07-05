@@ -10,7 +10,8 @@ import typer
 from . import __version__
 from .clients import add_client, remove_client, write_client_bundle
 from .cloudflare import Cloudflare
-from .controller import ReconcileResult, reconcile_once, run_controller
+from .controller import ReconcileResult, Steerer, reconcile_once, run_controller
+from .stats import StatsDB
 from .keys import generate_keypair, generate_obfuscation
 from .models import FleetConfig, Server
 from .provision import provision_server, push_config, teardown_server
@@ -201,7 +202,7 @@ def status():
     """Probe every node and show who would be in DNS rotation right now."""
     _, cfg = _load()
     cf = Cloudflare()
-    result: ReconcileResult = asyncio.run(reconcile_once(cfg, cf))
+    result: ReconcileResult = asyncio.run(reconcile_once(cfg, cf, Steerer(), StatsDB()))
     for p in result.probes:
         load = "?" if p.load is None else f"{p.load:.2f}"
         state = "up" if p.alive else "DOWN"
