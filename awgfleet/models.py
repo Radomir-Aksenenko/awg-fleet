@@ -44,7 +44,7 @@ class FleetConfig:
     server_private_key: str = ""
     server_public_key: str = ""
     obfuscation: dict = field(default_factory=dict)  # AmneziaWG Jc/S/H params
-    subnet: str = "10.8.0.0/24"
+    subnet: str = "10.66.66.0/24"  # off the 10.8.x defaults that OpenVPN/Amnezia grab
     dns: str = "1.1.1.1"
     mtu: int = 1280  # low by design so media never black-holes behind a small path MTU
     load_threshold: float = 0.85  # normalized loadavg above which a node leaves rotation

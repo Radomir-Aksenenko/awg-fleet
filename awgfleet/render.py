@@ -20,8 +20,8 @@ def _post_up(port: int) -> str:
     return (
         f"iptables -I INPUT -p udp --dport {port} -j ACCEPT; "
         "DEV=$(ip route show default | awk '{print $5; exit}'); "
-        "iptables -A FORWARD -i %i -j ACCEPT; "
-        "iptables -A FORWARD -o %i -j ACCEPT; "
+        "iptables -I FORWARD -i %i -j ACCEPT; "
+        "iptables -I FORWARD -o %i -j ACCEPT; "
         "iptables -t nat -A POSTROUTING -o $DEV -j MASQUERADE; "
         "iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN "
         "-j TCPMSS --clamp-mss-to-pmtu"

@@ -18,22 +18,22 @@ def make_cfg() -> FleetConfig:
 
 
 def test_server_gateway_address():
-    assert server_tunnel_address(make_cfg()) == "10.8.0.1/24"
+    assert server_tunnel_address(make_cfg()) == "10.66.66.1/24"
 
 
 def test_addresses_are_allocated_in_order():
     cfg = make_cfg()
     a = add_client(cfg, "iphone")
     b = add_client(cfg, "laptop")
-    assert a.address == "10.8.0.2/32"
-    assert b.address == "10.8.0.3/32"
+    assert a.address == "10.66.66.2/32"
+    assert b.address == "10.66.66.3/32"
 
 
 def test_removing_a_client_frees_its_address():
     cfg = make_cfg()
     add_client(cfg, "iphone")
     remove_client(cfg, "iphone")
-    assert allocate_address(cfg) == "10.8.0.2/32"
+    assert allocate_address(cfg) == "10.66.66.2/32"
 
 
 def test_server_conf_carries_every_peer():
