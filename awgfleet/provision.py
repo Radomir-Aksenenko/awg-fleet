@@ -15,17 +15,22 @@ from .ssh import run_ssh, upload_text
 REMOTE_CONF = "/etc/amnezia/amneziawg/awg0.conf"
 
 _INSTALL = r"""
-set -e
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v awg-quick >/dev/null 2>&1; then
-  apt-get update -qq
-  apt-get install -y -qq software-properties-common iproute2 iptables curl >/dev/null
+  # A single broken third-party repo must not abort the whole install, so every
+  # apt-get update is tolerated; the real check is whether awg-quick shows up.
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y -qq software-properties-common iproute2 iptables curl >/dev/null 2>&1 || true
   add-apt-repository -y ppa:amnezia/ppa >/dev/null 2>&1 || true
-  apt-get update -qq
-  apt-get install -y -qq amneziawg amneziawg-tools >/dev/null
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y -qq amneziawg amneziawg-tools >/dev/null 2>&1 || true
+fi
+if ! command -v awg-quick >/dev/null 2>&1; then
+  echo "AWG-INSTALL-FAILED: amneziawg-tools not available (check distro / apt sources)" >&2
+  exit 1
 fi
 mkdir -p /etc/amnezia/amneziawg
-sysctl -w net.ipv4.ip_forward=1 >/dev/null
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
 echo "install-ok"
 """
