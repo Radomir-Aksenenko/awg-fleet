@@ -38,9 +38,15 @@ def server_tunnel_address(cfg: FleetConfig) -> str:
     return f"{next(net.hosts())}/{net.prefixlen}"
 
 
+_OBF_ORDER = (
+    "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
+    "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5",
+)
+
+
 def _obfuscation_lines(cfg: FleetConfig) -> list[str]:
     o = cfg.obfuscation
-    return [f"{k} = {o[k]}" for k in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4") if k in o]
+    return [f"{k} = {o[k]}" for k in _OBF_ORDER if k in o]
 
 
 def render_server_conf(cfg: FleetConfig) -> str:

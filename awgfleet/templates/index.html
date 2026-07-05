@@ -210,7 +210,7 @@ async function clientModal(name){
     <div class="srvbar"><div class="lab"><span>${esc(n.node)}</span><span class="muted">${dur(n.session_secs)} · ${bytes(n.rx+n.tx)}</span></div>
       <div class="track"><i style="width:${Math.round(n.session_secs/totMax*100)}%"></i></div></div>`).join(''):'<div class="muted">no sessions yet</div>';
   openModal(name,`
-    <div class="tabs"><button class="tab on" onclick="cTab(this,'stats')">Stats</button><button class="tab" onclick="cTab(this,'cfg')">Config</button></div>
+    <div class="tabs"><button class="tab on" onclick="cTab(this,'stats')">Stats</button><button class="tab" onclick="cTab(this,'awg')">AmneziaWG</button><button class="tab" onclick="cTab(this,'vpn')">AmneziaVPN</button></div>
     <div id="cstats">
       <div class="kv">
         <span class="k">Status</span><span>${d.online?'<span class="dot up"></span>online':'<span class="dot off"></span>offline'}</span>
@@ -222,20 +222,29 @@ async function clientModal(name){
       <div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Time on each node</div>
       <div class="srvbars">${bars}</div>
     </div>
-    <div id="ccfg" style="display:none">
+    <div id="cawg" style="display:none">
       <img class="qr" src="/api/clients/${encodeURIComponent(name)}/qr?t=${Date.now()}" alt="QR"/>
       <pre class="conf" id="cconf">loading…</pre>
       <div class="rowbtns" style="margin-top:10px">
-        <button class="btn" onclick="copyConf()">Copy</button>
+        <button class="btn" onclick="copyText('cconf')">Copy</button>
         <a class="btn" href="/api/clients/${encodeURIComponent(name)}/config" download="${esc(name)}.conf">Download .conf</a>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:8px">Scan the QR or import the .conf in the AmneziaWG app.</div>
+      <div class="muted" style="font-size:12px;margin-top:8px">AmneziaWG app: scan the QR or import the .conf.</div>
+    </div>
+    <div id="cvpn" style="display:none">
+      <img class="qr" src="/api/clients/${encodeURIComponent(name)}/vpnqr?t=${Date.now()}" alt="QR"/>
+      <pre class="conf" id="cvpn2" style="max-height:120px">loading…</pre>
+      <div class="rowbtns" style="margin-top:10px">
+        <button class="btn" onclick="copyText('cvpn2')">Copy vpn:// link</button>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:8px">AmneziaVPN app: scan the QR or paste the vpn:// link (one-tap import).</div>
     </div>`);
   api('GET','/api/clients/'+encodeURIComponent(name)+'/config').then(t=>{const el=$('#cconf');if(el)el.textContent=t});
+  api('GET','/api/clients/'+encodeURIComponent(name)+'/vpn').then(t=>{const el=$('#cvpn2');if(el)el.textContent=t});
 }
 function cTab(btn,which){document.querySelectorAll('#modal .tab').forEach(t=>t.classList.remove('on'));btn.classList.add('on');
-  $('#cstats').style.display=which==='stats'?'':'none';$('#ccfg').style.display=which==='cfg'?'':'none'}
-async function copyConf(){try{await navigator.clipboard.writeText($('#cconf').textContent);toast('config copied')}catch(e){toast('copy failed',true)}}
+  $('#cstats').style.display=which==='stats'?'':'none';$('#cawg').style.display=which==='awg'?'':'none';$('#cvpn').style.display=which==='vpn'?'':'none'}
+async function copyText(id){try{await navigator.clipboard.writeText($('#'+id).textContent);toast('copied')}catch(e){toast('copy failed',true)}}
 
 async function serverModal(name){
   openModal(name,'<div class="muted">loading…</div>');

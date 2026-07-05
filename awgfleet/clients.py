@@ -47,16 +47,75 @@ def remove_client(cfg: FleetConfig, name: str) -> Client:
     raise KeyError(f"no client named {name!r}")
 
 
-def vpn_link(conf_text: str) -> str:
-    """Base64 config URI. The AmneziaWG client and several wg tools accept this;
-    the guaranteed-portable path is still the .conf / QR below."""
-    return "vpn://" + base64.b64encode(conf_text.encode()).decode()
+_AWG_KEYS = (
+    "H1", "H2", "H3", "H4", "S1", "S2", "S3", "S4",
+    "Jc", "Jmin", "Jmax", "I1", "I2", "I3", "I4", "I5",
+)
 
 
-def qr_png(conf_text: str) -> bytes:
+def vpn_uri(cfg: FleetConfig, client: Client) -> str:
+    """The Amnezia native `vpn://` URI for the AmneziaVPN app (as opposed to the
+    plain .conf the AmneziaWG app reads). Payload is the Amnezia container JSON,
+    qCompress-framed (4-byte big-endian length + zlib) and base64url-encoded,
+    matching what the desktop client emits."""
+    import json
+    import struct
+    import zlib
+
+    conf = render_client_conf(cfg, client)
+    client_ip = str(ipaddress.ip_interface(client.address).ip)
+    net = ipaddress.ip_network(cfg.subnet, strict=False)
+    dns = [d.strip() for d in cfg.dns.split(",")] + ["8.8.8.8"]
+    awg_params = {k: str(cfg.obfuscation[k]) for k in _AWG_KEYS if k in cfg.obfuscation}
+
+    last_config = {
+        **awg_params,
+        "allowed_ips": ["0.0.0.0/0", "::/0"],
+        "clientId": "",
+        "client_ip": client_ip,
+        "client_priv_key": client.private_key,
+        "client_pub_key": "",
+        "config": conf,
+        "hostName": cfg.domain,
+        "mtu": str(cfg.mtu),
+        "persistent_keep_alive": "25",
+        "port": cfg.listen_port,
+        "psk_key": client.preshared_key or "",
+        "server_pub_key": cfg.server_public_key,
+    }
+    awg = {
+        **awg_params,
+        "last_config": json.dumps(last_config, separators=(",", ":")),
+        "port": str(cfg.listen_port),
+        "protocol_version": "2",
+        "subnet_address": str(net.network_address),
+        "transport_proto": "udp",
+    }
+    payload = {
+        "containers": [{"awg": awg, "container": "amnezia-awg2"}],
+        "defaultContainer": "amnezia-awg2",
+        "description": f"AWG {cfg.domain}",
+        "dns1": dns[0],
+        "dns2": dns[1],
+        "hostName": cfg.domain,
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    blob = struct.pack(">I", len(raw)) + zlib.compress(raw, 9)
+    return "vpn://" + base64.urlsafe_b64encode(blob).decode().rstrip("=")
+
+
+def qr_png(text: str, low_ec: bool = False) -> bytes:
+    """QR as PNG. `low_ec` uses the loosest error correction so a long vpn://
+    URI still fits inside a single scannable code."""
     import qrcode
 
-    img = qrcode.make(conf_text)
+    if low_ec:
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
+        qr.add_data(text)
+        qr.make(fit=True)
+        img = qr.make_image()
+    else:
+        img = qrcode.make(text)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -73,6 +132,6 @@ def write_client_bundle(cfg: FleetConfig, client: Client, out_dir: str = ".") ->
         f.write(conf)
     with open(base + ".png", "wb") as f:
         f.write(qr_png(conf))
-    with open(base + ".link", "w", encoding="utf-8") as f:
-        f.write(vpn_link(conf) + "\n")
-    return {"conf": base + ".conf", "qr": base + ".png", "link": base + ".link"}
+    with open(base + ".vpn", "w", encoding="utf-8") as f:
+        f.write(vpn_uri(cfg, client) + "\n")
+    return {"conf": base + ".conf", "qr": base + ".png", "vpn": base + ".vpn"}

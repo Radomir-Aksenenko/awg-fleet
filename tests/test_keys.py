@@ -19,3 +19,9 @@ def test_obfuscation_constraints():
     assert o["S1"] != o["S2"]
     assert len({o["H1"], o["H2"], o["H3"], o["H4"]}) == 4
     assert 3 <= o["Jc"] <= 10
+
+
+def test_obfuscation_is_v2():
+    o = generate_obfuscation()
+    assert 1 <= o["S3"] <= 63 and 1 <= o["S4"] <= 31
+    assert o["I1"]  # non-empty CPS packet flips the tunnel into 2.0 mode

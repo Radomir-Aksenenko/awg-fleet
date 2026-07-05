@@ -39,11 +39,14 @@ def generate_preshared_key() -> str:
 
 
 def generate_obfuscation() -> dict:
-    """AmneziaWG 2.x obfuscation: junk packets (Jc/Jmin/Jmax), init/response
-    padding (S1/S2) and four distinct magic headers (H1..H4).
+    """AmneziaWG 2.0 obfuscation.
 
-    Padding is kept modest so the obfuscated handshake still fits a small path
-    MTU. S1 must differ from S2, and the four headers must be unique.
+    Junk packets (Jc/Jmin/Jmax), init/response padding (S1/S2), the 2.0 cookie
+    and data padding (S3/S4), four distinct magic headers (H1..H4) and the CPS
+    packet I1. I1 is what actually flips the tunnel into 2.0 mode: without it
+    both ends fall back to 1.5. Padding is kept modest so the obfuscated
+    handshake still fits a small path MTU; S1 must differ from S2 and the four
+    headers must be unique.
     """
     s1 = secrets.randbelow(120) + 15
     s2 = secrets.randbelow(120) + 15
@@ -61,8 +64,11 @@ def generate_obfuscation() -> dict:
         "Jmax": 80,
         "S1": s1,
         "S2": s2,
+        "S3": secrets.randbelow(63) + 1,  # 2.0 cookie junk prefix (1..63)
+        "S4": secrets.randbelow(31) + 1,  # 2.0 data junk prefix (1..31)
         "H1": h1,
         "H2": h2,
         "H3": h3,
         "H4": h4,
+        "I1": "<r 128>",  # 2.0 CPS packet: 128 random bytes before the handshake
     }

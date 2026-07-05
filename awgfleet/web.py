@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from .clients import add_client, qr_png, remove_client
+from .clients import add_client, qr_png, remove_client, vpn_uri
 from .models import Server
 from .provision import provision_server, push_config, teardown_server
 from .render import render_client_conf
@@ -232,4 +232,18 @@ async def client_config(name: str):
 async def client_qr(name: str):
     cfg = _load().config
     png = qr_png(render_client_conf(cfg, _find_client(cfg, name)))
+    return Response(png, media_type="image/png")
+
+
+@app.get("/api/clients/{name}/vpn", response_class=PlainTextResponse)
+async def client_vpn(name: str):
+    """The Amnezia vpn:// URI, for the AmneziaVPN app."""
+    cfg = _load().config
+    return vpn_uri(cfg, _find_client(cfg, name))
+
+
+@app.get("/api/clients/{name}/vpnqr")
+async def client_vpn_qr(name: str):
+    cfg = _load().config
+    png = qr_png(vpn_uri(cfg, _find_client(cfg, name)), low_ec=True)
     return Response(png, media_type="image/png")
