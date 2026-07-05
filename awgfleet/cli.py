@@ -213,7 +213,7 @@ def status():
 @app.command()
 def run():
     """Run the steering controller loop (health-check + DNS reconcile forever)."""
-    _, cfg = _load()
+    st, cfg = _load()
     cf = Cloudflare()
 
     def on_pass(result):
@@ -225,9 +225,22 @@ def run():
 
     typer.echo(f"controller up; reconciling {cfg.domain} every {cfg.health_interval}s")
     try:
-        asyncio.run(run_controller(cfg, cf, on_pass=on_pass))
+        asyncio.run(run_controller(st, cf, on_pass=on_pass))
     except KeyboardInterrupt:
         typer.echo("bye")
+
+
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", help="Bind address (keep on localhost, front it with a tunnel)"),
+    port: int = typer.Option(8080, help="Port for the web panel"),
+):
+    """Serve the web panel: manage servers and clients from a browser."""
+    _load()  # fail early if the fleet is not initialised
+    import uvicorn
+
+    typer.echo(f"awg-fleet panel on http://{host}:{port}")
+    uvicorn.run("awgfleet.web:app", host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

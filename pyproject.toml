@@ -13,6 +13,8 @@ dependencies = [
     "httpx>=0.25",
     "typer>=0.12",
     "qrcode[pil]>=7.4",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +29,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["awgfleet*"]
+
+[tool.setuptools.package-data]
+awgfleet = ["templates/*.html"]
 
 [tool.ruff]
 line-length = 100

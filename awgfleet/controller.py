@@ -46,13 +46,18 @@ async def reconcile_once(cfg: FleetConfig, cf: Cloudflare) -> ReconcileResult:
     return ReconcileResult(probes=list(probes), in_rotation=ips)
 
 
-async def run_controller(cfg: FleetConfig, cf: Cloudflare, on_pass=None) -> None:
+async def run_controller(state, cf: Cloudflare, on_pass=None) -> None:
+    """Reload state each pass so changes made via the CLI or web panel (a node
+    added, a client revoked) are picked up without a restart."""
+    interval = 30
     while True:
         try:
+            cfg = state.load()
+            interval = cfg.health_interval
             result = await reconcile_once(cfg, cf)
             if on_pass:
                 on_pass(result)
         except Exception as exc:  # keep the loop alive across transient API/SSH errors
             if on_pass:
                 on_pass(exc)
-        await asyncio.sleep(cfg.health_interval)
+        await asyncio.sleep(interval)

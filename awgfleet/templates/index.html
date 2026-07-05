@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>awg-fleet</title>
+<style>
+  :root {
+    --bg: #0c0e11; --panel: #14171c; --panel2: #1a1e24; --line: #262b33;
+    --ink: #e8ebef; --muted: #8b94a3; --accent: #35d0a5; --accent-dim: #1e6f5c;
+    --warn: #e0a23c; --down: #e0574c; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  code, .mono { font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace; font-size: 13px; }
+  a { color: var(--accent); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 28px 20px 80px; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: .3px; }
+  header h1 b { color: var(--accent); font-weight: 700; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .domain { margin-left: auto; }
+  .domain code { background: var(--panel2); padding: 4px 9px; border-radius: 6px; border: 1px solid var(--line); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    margin-top: 22px; overflow: hidden; }
+  .head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .head h2 { font-size: 14px; margin: 0; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+  .count { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 11px 18px; border-bottom: 1px solid var(--line); }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; vertical-align: middle; }
+  .up { background: var(--accent); box-shadow: 0 0 8px var(--accent-dim); }
+  .down { background: var(--down); }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.rot { color: var(--accent); border-color: var(--accent-dim); background: rgba(53,208,165,.08); }
+  .loadbar { position: relative; width: 90px; height: 6px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+  .loadbar > i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+  .loadbar > i.hot { background: var(--warn); }
+  .btn { font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--ink); cursor: pointer; }
+  .btn:hover { border-color: #3a4250; }
+  .btn.primary { background: var(--accent); color: #05201a; border-color: var(--accent); font-weight: 600; }
+  .btn.ghost { background: transparent; }
+  .btn.danger:hover { border-color: var(--down); color: var(--down); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .rowbtns { display: flex; gap: 6px; justify-content: flex-end; }
+  form.add { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 18px; background: var(--panel2); align-items: center; }
+  form.add input { font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); min-width: 0; }
+  form.add input:focus { outline: none; border-color: var(--accent-dim); }
+  .grow { flex: 1 1 130px; }
+  .muted { color: var(--muted); }
+  .empty { padding: 20px 18px; color: var(--muted); font-size: 14px; }
+  /* modal */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; padding: 20px; }
+  .modal.open { display: flex; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: 480px; max-width: 100%;
+    max-height: 90vh; overflow: auto; }
+  .card .head { justify-content: space-between; }
+  .card .body { padding: 18px; }
+  .qr { display: block; width: 220px; height: 220px; image-rendering: pixelated; margin: 0 auto 14px; background: #fff; border-radius: 8px; padding: 8px; }
+  pre.conf { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--ink); white-space: pre; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2);
+    border: 1px solid var(--line); padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: var(--down); color: var(--down); }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--muted); border-top-color: transparent;
+    border-radius: 50%; animation: s .7s linear infinite; vertical-align: -2px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><b>awg</b>-fleet</h1>
+    <span class="sub">one config, a fleet behind it</span>
+    <span class="domain sub">endpoint <code id="domain">…</code></span>
+  </header>
+
+  <section>
+    <div class="head"><h2>Nodes</h2><span class="count" id="nodeCount"></span></div>
+    <table>
+      <thead><tr><th>Name</th><th>Host</th><th>Region</th><th>Status</th><th>Load</th><th>Rotation</th><th></th></tr></thead>
+      <tbody id="nodes"><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
+    </table>
+    <form class="add" id="addServer">
+      <input name="name" placeholder="name (de2)" required style="flex:0 0 120px" />
+      <input name="host" placeholder="host / IP" required class="grow" />
+      <input name="region" placeholder="region" style="flex:0 0 90px" />
+      <input name="password" placeholder="root password" type="password" class="grow" />
+      <button class="btn primary" type="submit">Add node</button>
+    </form>
+  </section>
+
+  <section>
+    <div class="head"><h2>Clients</h2><span class="count" id="clientCount"></span></div>
+    <table>
+      <thead><tr><th>Name</th><th>Address</th><th>Created</th><th></th></tr></thead>
+      <tbody id="clients"><tr><td colspan="4" class="empty">loading…</td></tr></tbody>
+    </table>
+    <form class="add" id="addClient">
+      <input name="name" placeholder="client name (iphone)" required class="grow" />
+      <button class="btn primary" type="submit">Add client</button>
+    </form>
+  </section>
+</div>
+
+<div class="modal" id="modal">
+  <div class="card">
+    <div class="head"><h2 id="mTitle">config</h2><button class="btn ghost" onclick="closeModal()">close</button></div>
+    <div class="body">
+      <img class="qr" id="mQr" alt="QR" />
+      <pre class="conf" id="mConf"></pre>
+      <div class="rowbtns" style="margin-top:12px">
+        <button class="btn" onclick="copyConf()">Copy config</button>
+        <a class="btn" id="mDownload" download>Download .conf</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let current = null;
+
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
+  setTimeout(() => t.className = 'toast', 2600);
+}
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: body ? {'content-type':'application/json'} : {},
+    body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch(e){} throw new Error(m); }
+  return r.headers.get('content-type')?.includes('json') ? r.json() : r.text();
+}
+function fmtLoad(l) {
+  if (l == null) return '<span class="muted">?</span>';
+  const pct = Math.min(l * 100, 100), hot = l >= 0.85 ? ' hot' : '';
+  return `<span class="loadbar"><i class="${hot.trim()}" style="width:${pct}%"></i></span> <span class="muted">${l.toFixed(2)}</span>`;
+}
+function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function refresh() {
+  let d; try { d = await api('GET', '/api/status'); } catch(e){ toast('status: ' + e.message, true); return; }
+  $('#domain').textContent = d.domain + ':' + d.port;
+  $('#nodeCount').textContent = d.servers.length + ' node' + (d.servers.length===1?'':'s') +
+    ' · ' + d.rotation.length + ' in rotation';
+  $('#nodes').innerHTML = d.servers.length ? d.servers.map(s => `
+    <tr>
+      <td><b>${esc(s.name)}</b></td>
+      <td class="mono">${esc(s.host)}</td>
+      <td class="muted">${esc(s.region) || '—'}</td>
+      <td><span class="dot ${s.alive?'up':'down'}"></span>${s.alive?'up':'down'}</td>
+      <td>${fmtLoad(s.load)}</td>
+      <td>${s.in_rotation?'<span class="badge rot">in rotation</span>':'<span class="badge">out</span>'}</td>
+      <td class="rowbtns"><button class="btn ghost danger" onclick="rmServer('${esc(s.name)}')">remove</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">no nodes yet — add one below</td></tr>';
+  $('#clientCount').textContent = d.clients.length + ' client' + (d.clients.length===1?'':'s');
+  $('#clients').innerHTML = d.clients.length ? d.clients.map(c => `
+    <tr>
+      <td><b>${esc(c.name)}</b></td>
+      <td class="mono">${esc(c.address)}</td>
+      <td class="muted">${esc((c.created_at||'').replace('T',' ').replace('+00:00',' UTC'))}</td>
+      <td class="rowbtns">
+        <button class="btn" onclick="showConfig('${esc(c.name)}')">config</button>
+        <button class="btn ghost danger" onclick="rmClient('${esc(c.name)}')">remove</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="4" class="empty">no clients yet — add one below</td></tr>';
+}
+
+$('#addServer').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector('button');
+  const body = { name: f.name.value.trim(), host: f.host.value.trim(),
+    region: f.region.value.trim(), password: f.password.value };
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> provisioning…';
+  try { await api('POST', '/api/servers', body); f.reset(); toast('node ' + body.name + ' added'); await refresh(); }
+  catch(err){ toast(err.message, true); }
+  finally { btn.disabled = false; btn.textContent = 'Add node'; }
+};
+$('#addClient').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target, btn = f.querySelector('button');
+  const name = f.name.value.trim();
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> creating…';
+  try { const r = await api('POST', '/api/clients', { name }); f.reset();
+    toast('client ' + name + ' added' + (r.warnings?.length ? ' (' + r.warnings.length + ' node warning)' : ''));
+    await refresh(); showConfig(name); }
+  catch(err){ toast(err.message, true); }
+  finally { btn.disabled = false; btn.textContent = 'Add client'; }
+};
+async function rmServer(name){ if(!confirm('Remove node '+name+'?')) return;
+  try { await api('DELETE', '/api/servers/'+encodeURIComponent(name)); toast('node removed'); refresh(); }
+  catch(e){ toast(e.message, true); } }
+async function rmClient(name){ if(!confirm('Revoke client '+name+'?')) return;
+  try { await api('DELETE', '/api/clients/'+encodeURIComponent(name)); toast('client revoked'); refresh(); }
+  catch(e){ toast(e.message, true); } }
+
+async function showConfig(name){
+  current = name;
+  $('#mTitle').textContent = name + '.conf';
+  $('#mQr').src = '/api/clients/' + encodeURIComponent(name) + '/qr?t=' + Date.now();
+  $('#mDownload').href = '/api/clients/' + encodeURIComponent(name) + '/config';
+  $('#mDownload').setAttribute('download', name + '.conf');
+  $('#mConf').textContent = 'loading…';
+  try { $('#mConf').textContent = await api('GET', '/api/clients/'+encodeURIComponent(name)+'/config'); }
+  catch(e){ $('#mConf').textContent = e.message; }
+  $('#modal').classList.add('open');
+}
+function closeModal(){ $('#modal').classList.remove('open'); }
+$('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
+async function copyConf(){ try { await navigator.clipboard.writeText($('#mConf').textContent); toast('config copied'); }
+  catch(e){ toast('copy failed', true); } }
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

@@ -37,6 +37,7 @@ jobs:
             git pull --ff-only
             .venv/bin/pip install -q -e .
             systemctl restart awg-fleet
+            systemctl restart awg-fleet-web 2>/dev/null || true
             sleep 3
             systemctl is-active awg-fleet
             echo "deployed $(git rev-parse --short HEAD)"
