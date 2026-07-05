@@ -18,12 +18,13 @@ from dataclasses import dataclass
 from .cloudflare import Cloudflare
 from .health import Probe, probe
 from .models import FleetConfig
-from .stats import StatsDB
+from .stats import ONLINE_WINDOW, StatsDB
 
 EWMA_ALPHA = 0.4
 DOWN_STREAK_OUT = 2  # consecutive failed probes before a node leaves
 UP_STREAK_IN = 2  # consecutive healthy probes before a node may join
-DRAIN_GAP = 0.35  # load spread that triggers draining the heaviest node
+DRAIN_GAP = 0.35  # score spread that triggers draining the heaviest node
+USER_WEIGHT = 0.02  # each connected user counts like this much CPU load in the score
 
 
 class Steerer:
@@ -31,11 +32,18 @@ class Steerer:
 
     def __init__(self):
         self.ewma: dict[str, float] = {}
+        self.users: dict[str, int] = {}
         self.up: dict[str, int] = {}
         self.down: dict[str, int] = {}
         self.in_rot: set[str] = set()
 
+    def score(self, host: str) -> float:
+        """A node's load, blending smoothed CPU with its live user count, so a
+        box that is busy on connections (not CPU) is still seen as loaded."""
+        return self.ewma.get(host, 0.0) + USER_WEIGHT * self.users.get(host, 0)
+
     def decide(self, cfg: FleetConfig, probes: list[Probe]) -> list[str]:
+        now = int(time.time())
         thr = cfg.load_threshold
         for p in probes:
             h = p.server.host
@@ -44,6 +52,11 @@ class Steerer:
                 self.down[h] = 0
                 load = p.load if p.load is not None else 0.0
                 self.ewma[h] = EWMA_ALPHA * load + (1 - EWMA_ALPHA) * self.ewma.get(h, load)
+                self.users[h] = sum(
+                    1
+                    for v in p.peers.values()
+                    if v.get("handshake") and now - v["handshake"] < ONLINE_WINDOW
+                )
             else:
                 self.down[h] = self.down.get(h, 0) + 1
                 self.up[h] = 0
@@ -51,24 +64,24 @@ class Steerer:
         rot = set(self.in_rot)
         # leave: two missed probes, or sustained overload (upper hysteresis edge)
         for h in list(rot):
-            if self.down.get(h, 0) >= DOWN_STREAK_OUT or self.ewma.get(h, 1.0) >= thr * 1.1:
+            if self.down.get(h, 0) >= DOWN_STREAK_OUT or self.score(h) >= thr * 1.1:
                 rot.discard(h)
         # join: stable-healthy and comfortably under threshold (lower hysteresis edge)
         for p in probes:
             h = p.server.host
-            if p.alive and self.up.get(h, 0) >= UP_STREAK_IN and self.ewma.get(h, 0.0) < thr * 0.9:
+            if p.alive and self.up.get(h, 0) >= UP_STREAK_IN and self.score(h) < thr * 0.9:
                 rot.add(h)
         # never dark
         if not rot:
             alive = [p for p in probes if p.alive]
             if alive:
-                rot = {min(alive, key=lambda p: self.ewma.get(p.server.host, 0.0)).server.host}
+                rot = {min(alive, key=lambda p: self.score(p.server.host)).server.host}
         # drain the heaviest when the spread is wide, but only with 3+ nodes:
         # on a two-node fleet both stay in for redundancy.
         if len(rot) >= 3:
-            loads = {h: self.ewma.get(h, 0.0) for h in rot}
-            if max(loads.values()) - min(loads.values()) > DRAIN_GAP:
-                rot.discard(max(loads, key=loads.get))
+            scored = {h: self.score(h) for h in rot}
+            if max(scored.values()) - min(scored.values()) > DRAIN_GAP:
+                rot.discard(max(scored, key=scored.get))
 
         self.in_rot = rot
         return sorted(rot)

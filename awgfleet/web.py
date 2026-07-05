@@ -181,15 +181,11 @@ class ClientIn(BaseModel):
 
 
 async def _sync_all(cfg) -> list[str]:
-    warnings: list[str] = []
-    for s in cfg.servers:
-        if not s.enabled:
-            continue
-        try:
-            await push_config(s, cfg)
-        except Exception as exc:
-            warnings.append(f"{s.name}: {exc}")
-    return warnings
+    targets = [s for s in cfg.servers if s.enabled]
+    results = await asyncio.gather(
+        *(push_config(s, cfg) for s in targets), return_exceptions=True
+    )
+    return [f"{s.name}: {r}" for s, r in zip(targets, results) if isinstance(r, Exception)]
 
 
 @app.post("/api/clients")

@@ -55,18 +55,23 @@ async def install_amneziawg(server: Server) -> None:
 
 
 async def push_config(server: Server, cfg: FleetConfig) -> None:
-    """Upload the shared awg0.conf and (re)start the interface."""
+    """Upload the shared awg0.conf and apply it.
+
+    If the interface is already up, `awg syncconf` merges the change in place:
+    it adds or drops only the peers that differ and never touches the running
+    tunnels, so adding a client is instant and does not kick anyone off. A fresh
+    node with no interface yet gets the full `awg-quick up` (routes + PostUp)."""
     conf = render_server_conf(cfg)
     await run_ssh(server, "mkdir -p /etc/amnezia/amneziawg")
     await upload_text(server, REMOTE_CONF, conf)
     await run_ssh(server, f"chmod 600 {REMOTE_CONF}")
-    # awg-quick has no reload; down/up is the supported way to apply changes.
     await run_ssh(
         server,
-        "systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; "
-        "awg-quick down awg0 >/dev/null 2>&1 || true; "
-        "awg-quick up awg0",
-        timeout=120.0,
+        "if ip link show awg0 >/dev/null 2>&1; then "
+        "awg-quick strip awg0 > /tmp/awg0.sync 2>/dev/null "
+        "&& awg syncconf awg0 /tmp/awg0.sync; rm -f /tmp/awg0.sync; "
+        "else systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; awg-quick up awg0; fi",
+        timeout=90.0,
     )
 
 
