@@ -93,7 +93,7 @@ def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
     payload = {
         "containers": [{"awg": awg, "container": "amnezia-awg2"}],
         "defaultContainer": "amnezia-awg2",
-        "description": f"AWG {cfg.domain}",
+        "description": cfg.label or f"AWG {cfg.domain}",
         "dns1": dns[0],
         "dns2": dns[1],
         "hostName": cfg.domain,

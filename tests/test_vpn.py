@@ -49,6 +49,15 @@ def test_vpn_uri_roundtrips_to_amnezia_json():
     assert last["I1"]  # v2 CPS carried through
 
 
+def test_vpn_uri_uses_label_as_display_name():
+    cfg = _cfg()  # no label -> falls back to "AWG <domain>"
+    client = add_client(cfg, "iphone")
+    assert _decode(vpn_uri(cfg, client))["description"] == "AWG vpn.example.com"
+
+    cfg.label = "Динамический"
+    assert _decode(vpn_uri(cfg, client))["description"] == "Динамический"
+
+
 def _reassemble_qr_series(chunks: list[str]) -> bytes:
     """Mirror the AmneziaVPN app's QR reassembly: decode each chunk, check the
     magic, order by index, and concatenate the slices back into one blob."""

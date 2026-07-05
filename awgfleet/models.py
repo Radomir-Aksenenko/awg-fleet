@@ -39,6 +39,7 @@ class FleetConfig:
     """The single source of truth, persisted as state.json."""
 
     domain: str  # the one endpoint clients use, e.g. "vpn.example.com"
+    label: str = ""  # name the imported VPN shows in the app (falls back to "AWG <domain>")
     cf_zone_id: str = ""
     listen_port: int = 51820
     server_private_key: str = ""
