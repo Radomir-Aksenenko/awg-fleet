@@ -63,8 +63,9 @@ class Steerer:
             alive = [p for p in probes if p.alive]
             if alive:
                 rot = {min(alive, key=lambda p: self.ewma.get(p.server.host, 0.0)).server.host}
-        # drain the heaviest when the spread is wide
-        if len(rot) >= 2:
+        # drain the heaviest when the spread is wide, but only with 3+ nodes:
+        # on a two-node fleet both stay in for redundancy.
+        if len(rot) >= 3:
             loads = {h: self.ewma.get(h, 0.0) for h in rot}
             if max(loads.values()) - min(loads.values()) > DRAIN_GAP:
                 rot.discard(max(loads, key=loads.get))

@@ -37,10 +37,20 @@ def test_never_goes_dark():
     assert _settle(Steerer(), _cfg(), probes) == ["1.1.1.1"]
 
 
-def test_drains_heaviest_on_wide_load_gap():
+def test_two_node_fleet_keeps_both_despite_gap():
+    # draining would leave a single point of failure, so a 2-node fleet holds both
     probes = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.6)]
+    assert set(_settle(Steerer(), _cfg(), probes, passes=5)) == {"1.1.1.1", "2.2.2.2"}
+
+
+def test_drains_heaviest_with_three_nodes():
+    probes = [
+        Probe(_srv("a", "1.1.1.1"), True, 0.1),
+        Probe(_srv("b", "2.2.2.2"), True, 0.1),
+        Probe(_srv("c", "3.3.3.3"), True, 0.6),
+    ]
     out = _settle(Steerer(), _cfg(), probes, passes=5)
-    assert "1.1.1.1" in out and "2.2.2.2" not in out
+    assert "3.3.3.3" not in out and {"1.1.1.1", "2.2.2.2"} <= set(out)
 
 
 def test_all_down_publishes_nothing():

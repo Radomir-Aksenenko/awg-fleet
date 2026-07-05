@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict
 
 from .models import Client, FleetConfig, Server
@@ -30,6 +31,11 @@ class State:
     def save(self) -> None:
         if self.config is None:
             raise RuntimeError("nothing to save; call load() or set config first")
+        if os.path.exists(self.path):
+            try:  # keep one rollback copy so a bad edit never loses clients/keys
+                shutil.copy2(self.path, self.path + ".bak")
+            except OSError:
+                pass
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(asdict(self.config), f, indent=2, ensure_ascii=False)

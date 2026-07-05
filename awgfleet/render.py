@@ -13,16 +13,23 @@ import ipaddress
 
 from .models import Client, FleetConfig
 
-# NAT + forwarding + MSS clamp, keyed off the node's real default-route interface.
-_POSTUP = (
-    "DEV=$(ip route show default | awk '{print $5; exit}'); "
-    "iptables -A FORWARD -i %i -j ACCEPT; "
-    "iptables -A FORWARD -o %i -j ACCEPT; "
-    "iptables -t nat -A POSTROUTING -o $DEV -j MASQUERADE; "
-    "iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN "
-    "-j TCPMSS --clamp-mss-to-pmtu"
-)
-_POSTDOWN = _POSTUP.replace("-A ", "-D ").replace("-I ", "-D ")
+def _post_up(port: int) -> str:
+    """Open the listen port in INPUT (nodes with a default-DROP policy would
+    otherwise silently eat every handshake), then set up NAT, forwarding and an
+    MSS clamp keyed off the node's real default-route interface."""
+    return (
+        f"iptables -I INPUT -p udp --dport {port} -j ACCEPT; "
+        "DEV=$(ip route show default | awk '{print $5; exit}'); "
+        "iptables -A FORWARD -i %i -j ACCEPT; "
+        "iptables -A FORWARD -o %i -j ACCEPT; "
+        "iptables -t nat -A POSTROUTING -o $DEV -j MASQUERADE; "
+        "iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN "
+        "-j TCPMSS --clamp-mss-to-pmtu"
+    )
+
+
+def _post_down(port: int) -> str:
+    return _post_up(port).replace("-I ", "-D ").replace("-A ", "-D ")
 
 
 def server_tunnel_address(cfg: FleetConfig) -> str:
@@ -43,8 +50,8 @@ def render_server_conf(cfg: FleetConfig) -> str:
         f"Address = {server_tunnel_address(cfg)}",
         f"ListenPort = {cfg.listen_port}",
         f"MTU = {cfg.mtu}",
-        f"PostUp = {_POSTUP}",
-        f"PostDown = {_POSTDOWN}",
+        f"PostUp = {_post_up(cfg.listen_port)}",
+        f"PostDown = {_post_down(cfg.listen_port)}",
         *_obfuscation_lines(cfg),
     ]
     for c in cfg.clients:
