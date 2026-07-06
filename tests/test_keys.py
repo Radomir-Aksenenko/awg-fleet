@@ -21,7 +21,9 @@ def test_obfuscation_constraints():
     assert 3 <= o["Jc"] <= 10
 
 
-def test_obfuscation_is_v2():
+def test_obfuscation_has_padding_but_no_signature_packets():
     o = generate_obfuscation()
-    assert 1 <= o["S3"] <= 63 and 1 <= o["S4"] <= 31
-    assert o["I1"]  # non-empty CPS packet flips the tunnel into 2.0 mode
+    assert 1 <= o["S3"] <= 63 and 1 <= o["S4"] <= 31  # 2.0 padding kept
+    # I1..I5 are intentionally absent: an active I1 stalled data on mobile, and
+    # the Amnezia app ships them disabled anyway
+    assert not any(k in o for k in ("I1", "I2", "I3", "I4", "I5"))

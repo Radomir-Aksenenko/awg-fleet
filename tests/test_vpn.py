@@ -46,7 +46,7 @@ def test_vpn_uri_roundtrips_to_amnezia_json():
     assert last["server_pub_key"] == cfg.server_public_key
     assert last["client_priv_key"] == client.private_key
     assert "Endpoint = vpn.example.com:46441" in last["config"]
-    assert last["I1"]  # v2 CPS carried through
+    assert "I1" not in last  # signature packets disabled (mobile-stable, app-shaped)
 
 
 def test_vpn_uri_uses_label_as_display_name():

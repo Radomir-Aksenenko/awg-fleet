@@ -39,14 +39,18 @@ def generate_preshared_key() -> str:
 
 
 def generate_obfuscation() -> dict:
-    """AmneziaWG 2.0 obfuscation.
+    """AmneziaWG obfuscation, matching what the shipped Amnezia app generates.
 
     Junk packets (Jc/Jmin/Jmax), init/response padding (S1/S2), the 2.0 cookie
-    and data padding (S3/S4), four distinct magic headers (H1..H4) and the CPS
-    packet I1. I1 is what actually flips the tunnel into 2.0 mode: without it
-    both ends fall back to 1.5. Padding is kept modest so the obfuscated
-    handshake still fits a small path MTU; S1 must differ from S2 and the four
-    headers must be unique.
+    and data padding (S3/S4) and four distinct magic headers (H1..H4). S1 must
+    differ from S2 and the four headers must be unique.
+
+    The I1..I5 signature packets are deliberately NOT emitted. The Amnezia app's
+    own configs leave them commented out, and an active I1 (e.g. `<r 128>`) is
+    the one difference that made this fleet's tunnels flaky on mobile: the
+    handshake still comes up, but the kernel module's 2.0 signature-packet path
+    stalls the data flow on some carriers where the app's own configs are rock
+    solid. Dropping I1..I5 makes our config byte-shaped like the proven one.
     """
     s1 = secrets.randbelow(120) + 15
     s2 = secrets.randbelow(120) + 15
@@ -70,5 +74,4 @@ def generate_obfuscation() -> dict:
         "H2": h2,
         "H3": h3,
         "H4": h4,
-        "I1": "<r 128>",  # 2.0 CPS packet: 128 random bytes before the handshake
     }
