@@ -59,14 +59,18 @@ async def push_config(server: Server, cfg: FleetConfig) -> None:
 
     If the interface is already up, `awg syncconf` merges the change in place:
     it adds or drops only the peers that differ and never touches the running
-    tunnels, so adding a client is instant and does not kick anyone off. A fresh
-    node with no interface yet gets the full `awg-quick up` (routes + PostUp)."""
+    tunnels, so adding a client is instant and does not kick anyone off. The MTU
+    lives outside the peer set, so syncconf won't touch it; we set it live with
+    `ip link set` (also non-disruptive) so an MTU change reaches the fleet
+    without a restart. A fresh node with no interface yet gets the full
+    `awg-quick up` (routes + PostUp)."""
     conf = render_server_conf(cfg)
     apply = (
         f"chmod 600 {REMOTE_CONF}; "
         "if ip link show awg0 >/dev/null 2>&1; then "
         "awg-quick strip awg0 > /tmp/awg0.sync 2>/dev/null "
         "&& awg syncconf awg0 /tmp/awg0.sync; rm -f /tmp/awg0.sync; "
+        f"ip link set dev awg0 mtu {cfg.mtu} 2>/dev/null || true; "
         "else systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; awg-quick up awg0; fi"
     )
     await upload_and_run(server, REMOTE_CONF, conf, apply, timeout=90.0)

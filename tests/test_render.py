@@ -43,7 +43,7 @@ def test_server_conf_carries_every_peer():
     conf = render_server_conf(cfg)
     assert a.public_key in conf and b.public_key in conf
     assert "ListenPort = 51820" in conf
-    assert "MTU = 1280" in conf
+    assert "MTU = 1200" in conf
 
 
 def test_client_conf_points_at_the_domain_not_a_node():
