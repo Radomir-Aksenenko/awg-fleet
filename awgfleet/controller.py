@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from .cloudflare import Cloudflare
 from .health import Probe, probe
 from .models import FleetConfig
+from .render import client_endpoint_host
 from .stats import ONLINE_WINDOW, StatsDB
 
 EWMA_ALPHA = 0.4
@@ -48,6 +49,7 @@ class Steerer:
         self.prio: dict[str, int] = {}
         self.primary: str | None = None  # the single host currently published in DNS
         self.in_rot: set[str] = set()  # kept in sync with primary for the panel/meta
+        self.pub: dict[str, str] = {}  # steering subdomain -> last-published IP (change cache)
 
     def _best(self, hosts) -> str:
         """Highest priority first, then lightest score."""
@@ -131,6 +133,26 @@ async def reconcile_once(cfg: FleetConfig, cf: Cloudflare, steerer: Steerer, sta
     ips = steerer.decide(cfg, probes)
     if ips:  # never publish an empty set; a stale record still routes
         cf.reconcile_a_records(cfg.cf_zone_id, cfg.domain, ips, ttl=60)
+
+    # Per-client steering: keep each load-distributed client on its home node,
+    # fail it over to the lightest live node while home is down, and put it back
+    # when home recovers. Cloudflare is only touched when a target actually
+    # changes, so 40 steady records cost one API call, not 40 per pass.
+    alive_hosts = {p.server.host for p in probes if p.alive}
+    fallback = min(alive_hosts, key=steerer.score) if alive_hosts else None
+    for c in cfg.clients:
+        if not c.home_host:
+            continue
+        target = c.home_host if c.home_host in alive_hosts else fallback
+        if not target:
+            continue
+        sub = client_endpoint_host(cfg, c)
+        if steerer.pub.get(sub) != target:
+            try:
+                cf.reconcile_a_records(cfg.cf_zone_id, sub, [target], ttl=60)
+                steerer.pub[sub] = target
+            except Exception:
+                pass
 
     name_by_host = {s.host: s.name for s in cfg.servers}
     stats.set_meta(

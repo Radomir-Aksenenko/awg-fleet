@@ -8,7 +8,32 @@ import ipaddress
 
 from .keys import generate_keypair, generate_preshared_key
 from .models import Client, FleetConfig
-from .render import render_client_conf
+from .render import client_endpoint_host, render_client_conf
+
+
+def pick_home_host(
+    cfg: FleetConfig,
+    load_by_host: dict[str, float] | None = None,
+    alive_by_host: dict[str, bool] | None = None,
+) -> str:
+    """Choose the node a new client should call home: the one carrying the fewest
+    assigned clients, breaking ties by live load. Counting assignments (not just
+    CPU) is what keeps 40 quick sign-ups from all landing on the same node before
+    the load metric catches up. Down nodes are skipped when we know their state."""
+    load_by_host = load_by_host or {}
+    alive_by_host = alive_by_host or {}
+    counts: dict[str, int] = {}
+    for c in cfg.clients:
+        if c.home_host:
+            counts[c.home_host] = counts.get(c.home_host, 0) + 1
+    candidates = [
+        s.host for s in cfg.servers if s.enabled and alive_by_host.get(s.host, True)
+    ]
+    if not candidates:  # nothing known-alive -> fall back to any enabled node
+        candidates = [s.host for s in cfg.servers if s.enabled]
+    if not candidates:
+        return ""
+    return min(candidates, key=lambda h: (counts.get(h, 0), load_by_host.get(h, 0.0)))
 
 
 def allocate_address(cfg: FleetConfig) -> str:
@@ -24,7 +49,13 @@ def allocate_address(cfg: FleetConfig) -> str:
     raise RuntimeError("subnet exhausted; widen `subnet` in state.json")
 
 
-def add_client(cfg: FleetConfig, name: str, created_at: str = "", use_psk: bool = True) -> Client:
+def add_client(
+    cfg: FleetConfig,
+    name: str,
+    created_at: str = "",
+    use_psk: bool = True,
+    home_host: str = "",
+) -> Client:
     if any(c.name == name for c in cfg.clients):
         raise ValueError(f"client {name!r} already exists")
     priv, pub = generate_keypair()
@@ -35,6 +66,7 @@ def add_client(cfg: FleetConfig, name: str, created_at: str = "", use_psk: bool 
         address=allocate_address(cfg),
         preshared_key=generate_preshared_key() if use_psk else None,
         created_at=created_at,
+        home_host=home_host,
     )
     cfg.clients.append(client)
     return client
@@ -62,6 +94,7 @@ def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
     import zlib
 
     conf = render_client_conf(cfg, client)
+    endpoint_host = client_endpoint_host(cfg, client)
     client_ip = str(ipaddress.ip_interface(client.address).ip)
     net = ipaddress.ip_network(cfg.subnet, strict=False)
     dns = [d.strip() for d in cfg.dns.split(",")] + ["8.8.8.8"]
@@ -75,7 +108,7 @@ def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
         "client_priv_key": client.private_key,
         "client_pub_key": "",
         "config": conf,
-        "hostName": cfg.domain,
+        "hostName": endpoint_host,
         "mtu": str(cfg.mtu),
         "persistent_keep_alive": "25",
         "port": cfg.listen_port,
@@ -96,7 +129,7 @@ def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
         "description": cfg.label or f"AWG {cfg.domain}",
         "dns1": dns[0],
         "dns2": dns[1],
-        "hostName": cfg.domain,
+        "hostName": endpoint_host,
     }
     raw = json.dumps(payload, separators=(",", ":")).encode()
     return struct.pack(">I", len(raw)) + zlib.compress(raw, 9)

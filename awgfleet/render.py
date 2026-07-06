@@ -38,6 +38,17 @@ def server_tunnel_address(cfg: FleetConfig) -> str:
     return f"{next(net.hosts())}/{net.prefixlen}"
 
 
+def client_endpoint_host(cfg: FleetConfig, client: Client) -> str:
+    """The hostname a client's config resolves to. A load-distributed client
+    (home node assigned) gets its own steering record nX.<domain>, so it stays
+    on one node and can fail over independently. A legacy client (no home node)
+    uses the shared fleet domain and keeps its active-passive behavior."""
+    if client.home_host:
+        octet = client.address.split("/")[0].rsplit(".", 1)[-1]
+        return f"n{octet}.{cfg.domain}"
+    return cfg.domain
+
+
 _OBF_ORDER = (
     "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
     "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5",
@@ -85,7 +96,7 @@ def render_client_conf(cfg: FleetConfig, client: Client) -> str:
         lines.append(f"PresharedKey = {client.preshared_key}")
     lines += [
         "AllowedIPs = 0.0.0.0/0, ::/0",
-        f"Endpoint = {cfg.domain}:{cfg.listen_port}",
+        f"Endpoint = {client_endpoint_host(cfg, client)}:{cfg.listen_port}",
         "PersistentKeepalive = 25",
     ]
     return "\n".join(lines) + "\n"

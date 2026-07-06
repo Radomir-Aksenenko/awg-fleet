@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import typer
 
 from . import __version__
-from .clients import add_client, remove_client, write_client_bundle
+from .clients import add_client, pick_home_host, remove_client, write_client_bundle
 from .cloudflare import Cloudflare
 from .controller import ReconcileResult, Steerer, reconcile_once, run_controller
 from .stats import StatsDB
@@ -157,12 +157,18 @@ def client_add(
 ):
     """Create a client, mirror it to every node and emit its config bundle."""
     st, cfg = _load()
+    stats = StatsDB()
+    by_name = {s.name: s.host for s in cfg.servers}
+    load_by_host = {by_name[n]: v for n, v in stats.get_meta("load", {}).items() if n in by_name}
+    alive_by_host = {by_name[n]: v for n, v in stats.get_meta("alive", {}).items() if n in by_name}
+    home = pick_home_host(cfg, load_by_host, alive_by_host)
     try:
-        client = add_client(cfg, name, created_at=_now(), use_psk=not no_psk)
+        client = add_client(cfg, name, created_at=_now(), use_psk=not no_psk, home_host=home)
     except ValueError as exc:
         typer.secho(str(exc), fg="red")
         raise typer.Exit(1)
-    typer.echo(f"added {name} as {client.address}; syncing nodes ...")
+    home_name = next((s.name for s in cfg.servers if s.host == home), home) or "domain"
+    typer.echo(f"added {name} as {client.address} -> home {home_name}; syncing nodes ...")
     asyncio.run(_sync_all(cfg))
     st.save()
     files = write_client_bundle(cfg, client, out_dir=out)
