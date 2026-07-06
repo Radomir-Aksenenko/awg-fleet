@@ -134,25 +134,35 @@ async def reconcile_once(cfg: FleetConfig, cf: Cloudflare, steerer: Steerer, sta
     if ips:  # never publish an empty set; a stale record still routes
         cf.reconcile_a_records(cfg.cf_zone_id, cfg.domain, ips, ttl=60)
 
-    # Per-client steering: keep each load-distributed client on its home node,
-    # fail it over to the lightest live node while home is down, and put it back
-    # when home recovers. Cloudflare is only touched when a target actually
-    # changes, so 40 steady records cost one API call, not 40 per pass.
+    # Per-client steering: the controller is the sole owner of the nX.<domain>
+    # records. Each load-distributed client stays on its home node, fails over to
+    # the lightest live node while home is down, and returns when home recovers.
+    # Records for clients that no longer exist are cleaned up. Cloudflare is only
+    # touched when a target actually changes, so 40 steady records cost nothing
+    # per pass, not 40 API calls.
     alive_hosts = {p.server.host for p in probes if p.alive}
     fallback = min(alive_hosts, key=steerer.score) if alive_hosts else None
+    desired: dict[str, str] = {}
     for c in cfg.clients:
         if not c.home_host:
             continue
         target = c.home_host if c.home_host in alive_hosts else fallback
-        if not target:
-            continue
-        sub = client_endpoint_host(cfg, c)
+        if target:
+            desired[client_endpoint_host(cfg, c)] = target
+    for sub, target in desired.items():
         if steerer.pub.get(sub) != target:
             try:
                 cf.reconcile_a_records(cfg.cf_zone_id, sub, [target], ttl=60)
                 steerer.pub[sub] = target
             except Exception:
                 pass
+    for sub in list(steerer.pub):  # a client was removed -> drop its record
+        if sub not in desired:
+            try:
+                cf.reconcile_a_records(cfg.cf_zone_id, sub, [], ttl=60)
+            except Exception:
+                pass
+            steerer.pub.pop(sub, None)
 
     name_by_host = {s.host: s.name for s in cfg.servers}
     stats.set_meta(
