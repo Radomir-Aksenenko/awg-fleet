@@ -89,6 +89,31 @@
   .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--muted);border-top-color:transparent;
     border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
   @keyframes s{to{transform:rotate(360deg)}}
+
+  @media (max-width:720px){
+    .wrap{padding:16px 12px 80px}
+    header{gap:8px}
+    header h1{font-size:19px}
+    .domain{margin-left:0;flex-basis:100%}
+    .strip{grid-template-columns:1fr 1fr}
+    table thead{display:none}
+    table,tbody,tr,td{display:block;width:100%}
+    tbody tr.clk{padding:10px 14px}
+    tbody tr{border-bottom:1px solid var(--line)}
+    tbody tr:last-child{border-bottom:none}
+    td{border-bottom:none;padding:5px 0;display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:right}
+    td[data-label]::before{content:attr(data-label);color:var(--muted);font-size:11px;text-transform:uppercase;
+      letter-spacing:.08em;flex:0 0 auto;text-align:left}
+    td.empty{text-align:left;padding:16px 14px}
+    td.rowbtns{justify-content:flex-end;padding-top:8px}
+    form.add{padding:12px 14px}
+    form.add input,form.add .grow{flex:1 1 100%}
+    form.add .btn{flex:1 1 100%}
+    .card{width:100%}
+    .qr{width:170px;height:170px}
+    .kv{grid-template-columns:auto 1fr;font-size:13px}
+    .modal{padding:10px}
+  }
 </style>
 </head>
 <body>
@@ -179,18 +204,18 @@ async function refresh(){
   $('#clientCount').textContent=d.clients.length+' client'+(d.clients.length==1?'':'s')+' · '+d.online+' online';
   $('#nodes').innerHTML=d.servers.length?d.servers.map(s=>`
     <tr class="clk" onclick="serverModal('${esc(s.name)}')">
-      <td><b>${esc(s.name)}</b></td><td class="mono">${esc(s.host)}</td><td class="muted">${esc(s.region)||'—'}</td>
-      <td><span class="dot ${s.alive?'up':'down'}"></span>${s.alive===false?'down':(s.alive?'up':'?')}</td>
-      <td>${fmtLoad(s.load)}</td><td>${s.users}</td>
-      <td>${s.in_rotation?'<span class="badge rot">in rotation</span>':'<span class="badge">out</span>'}</td>
+      <td data-label="Name"><b>${esc(s.name)}</b></td><td data-label="Host" class="mono">${esc(s.host)}</td><td data-label="Region" class="muted">${esc(s.region)||'—'}</td>
+      <td data-label="Status"><span class="dot ${s.alive?'up':'down'}"></span>${s.alive===false?'down':(s.alive?'up':'?')}</td>
+      <td data-label="Load">${fmtLoad(s.load)}</td><td data-label="Users">${s.users}</td>
+      <td data-label="Rotation">${s.in_rotation?'<span class="badge rot">in rotation</span>':'<span class="badge">out</span>'}</td>
       <td class="rowbtns"><button class="btn ghost danger" onclick="event.stopPropagation();rmServer('${esc(s.name)}')">remove</button></td>
     </tr>`).join(''):'<tr><td colspan="8" class="empty">no nodes yet</td></tr>';
   $('#clients').innerHTML=d.clients.length?d.clients.map(c=>`
     <tr class="clk" onclick="clientModal('${esc(c.name)}')">
-      <td><b>${esc(c.name)}</b></td><td class="mono">${esc(c.address)}</td>
-      <td><span class="dot ${c.online?'up':'off'}"></span>${c.online?'online':'offline'}</td>
-      <td class="muted">${bytes(c.rx+c.tx)}</td><td class="muted">${ago(c.last_seen)}</td>
-      <td class="muted">${esc(c.favorite)||'—'}</td>
+      <td data-label="Name"><b>${esc(c.name)}</b></td><td data-label="Address" class="mono">${esc(c.address)}</td>
+      <td data-label="Status"><span class="dot ${c.online?'up':'off'}"></span>${c.online?'online':'offline'}</td>
+      <td data-label="Traffic" class="muted">${bytes(c.rx+c.tx)}</td><td data-label="Last seen" class="muted">${ago(c.last_seen)}</td>
+      <td data-label="Favourite" class="muted">${esc(c.favorite)||'—'}</td>
       <td class="rowbtns"><button class="btn" onclick="event.stopPropagation();clientModal('${esc(c.name)}')">config</button>
         <button class="btn ghost danger" onclick="event.stopPropagation();rmClient('${esc(c.name)}')">remove</button></td>
     </tr>`).join(''):'<tr><td colspan="7" class="empty">no clients yet</td></tr>';
