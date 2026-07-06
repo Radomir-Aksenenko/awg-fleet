@@ -45,8 +45,13 @@ class Steerer:
         self.users: dict[str, int] = {}
         self.up: dict[str, int] = {}
         self.down: dict[str, int] = {}
+        self.prio: dict[str, int] = {}
         self.primary: str | None = None  # the single host currently published in DNS
         self.in_rot: set[str] = set()  # kept in sync with primary for the panel/meta
+
+    def _best(self, hosts) -> str:
+        """Highest priority first, then lightest score."""
+        return min(hosts, key=lambda h: (-self.prio.get(h, 0), self.score(h)))
 
     def score(self, host: str) -> float:
         """A node's load, blending smoothed CPU with its live user count, so a
@@ -58,6 +63,7 @@ class Steerer:
         thr = cfg.load_threshold
         for p in probes:
             h = p.server.host
+            self.prio[h] = getattr(p.server, "priority", 0)
             if p.alive:
                 self.up[h] = self.up.get(h, 0) + 1
                 self.down[h] = 0
@@ -79,9 +85,18 @@ class Steerer:
 
         prim = self.primary
         prim_ok = prim is not None and self.down.get(prim, 0) < DOWN_STREAK_OUT
+        preferred = self._best(ready) if ready else None
         if not prim_ok:
-            # cold start or failover: the primary is gone, take the lightest node
-            self.primary = min(ready, key=self.score) if ready else None
+            # cold start or failover: the primary is gone, take the best node
+            self.primary = preferred
+        elif (
+            preferred is not None
+            and self.prio.get(preferred, 0) > self.prio.get(prim, 0)
+            and self.score(preferred) < thr * 0.9
+        ):
+            # a higher-priority node is healthy and comfortably under threshold:
+            # it preempts (an overloaded preferred node stays out, so no flapping)
+            self.primary = preferred
         elif self.score(prim) >= thr * 1.1:
             # primary sustainedly overloaded: shed, but only to a clearly lighter
             # node (hysteresis) so a wobble never bounces everyone between nodes

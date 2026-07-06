@@ -19,6 +19,11 @@ class Server:
     ssh_key_path: Optional[str] = None
     region: str = ""
     enabled: bool = True
+    # Steering preference: among healthy nodes the highest priority wins the
+    # primary slot regardless of load. Lets you pin the fleet to the node with
+    # the best reachability (e.g. one IP is throttled on some mobile carrier)
+    # while keeping the others as failover.
+    priority: int = 0
 
 
 @dataclass

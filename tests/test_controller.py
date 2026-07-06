@@ -7,8 +7,8 @@ def _cfg(threshold: float = 0.85) -> FleetConfig:
     return FleetConfig(domain="d", load_threshold=threshold)
 
 
-def _srv(name: str, host: str) -> Server:
-    return Server(name=name, host=host)
+def _srv(name: str, host: str, priority: int = 0) -> Server:
+    return Server(name=name, host=host, priority=priority)
 
 
 def _settle(steerer, cfg, probes, passes=3):
@@ -65,6 +65,43 @@ def test_primary_fails_over_after_two_misses():
     down = [Probe(_srv("a", "1.1.1.1"), False, None), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
     assert s.decide(cfg, down) == ["1.1.1.1"]  # one miss tolerated, primary held
     assert s.decide(cfg, down) == ["2.2.2.2"]  # second miss -> fail over to the standby
+
+
+def test_priority_node_wins_even_if_heavier():
+    probes = [
+        Probe(_srv("a", "1.1.1.1"), True, 0.05),
+        Probe(_srv("b", "2.2.2.2", priority=1), True, 0.3),
+    ]
+    assert _settle(Steerer(), _cfg(), probes, passes=4) == ["2.2.2.2"]
+
+
+def test_priority_node_preempts_running_primary():
+    s, cfg = Steerer(), _cfg()
+    plain = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
+    assert _settle(s, cfg, plain, 3) == ["1.1.1.1"]
+    # b gains priority (e.g. operator pins it in state.json): it takes over
+    pinned = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2", priority=1), True, 0.2)]
+    assert _settle(s, cfg, pinned, 3) == ["2.2.2.2"]
+
+
+def test_overloaded_priority_node_does_not_preempt():
+    s, cfg = Steerer(), _cfg(threshold=0.3)
+    probes = [
+        Probe(_srv("a", "1.1.1.1"), True, 0.1),
+        Probe(_srv("b", "2.2.2.2", priority=1), True, 0.9),  # preferred but slammed
+    ]
+    assert _settle(s, cfg, probes, passes=5) == ["1.1.1.1"]
+
+
+def test_failover_prefers_priority_node():
+    s, cfg = Steerer(), _cfg()
+    up = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2", priority=1), True, 0.2)]
+    assert _settle(s, cfg, up, 3) == ["2.2.2.2"]
+    down_b = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2", priority=1), False, None)]
+    s.decide(cfg, down_b)
+    assert s.decide(cfg, down_b) == ["1.1.1.1"]  # fails over to the plain node
+    # b comes back healthy -> preempts its way back in after proving itself
+    assert _settle(s, cfg, up, 3) == ["2.2.2.2"]
 
 
 def test_never_goes_dark():
