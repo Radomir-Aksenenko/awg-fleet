@@ -3,8 +3,8 @@ from awgfleet.health import Probe
 from awgfleet.models import FleetConfig, Server
 
 
-def _cfg() -> FleetConfig:
-    return FleetConfig(domain="d", load_threshold=0.85)
+def _cfg(threshold: float = 0.85) -> FleetConfig:
+    return FleetConfig(domain="d", load_threshold=threshold)
 
 
 def _srv(name: str, host: str) -> Server:
@@ -18,39 +18,58 @@ def _settle(steerer, cfg, probes, passes=3):
     return out
 
 
-def test_healthy_nodes_join_rotation():
+def test_lightest_node_becomes_primary():
+    # active-passive: exactly one IP in DNS, the lighter node
     probes = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
-    assert set(_settle(Steerer(), _cfg(), probes)) == {"1.1.1.1", "2.2.2.2"}
-
-
-def test_down_node_leaves_only_after_two_misses():
-    s, cfg = Steerer(), _cfg()
-    up = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
-    _settle(s, cfg, up, 3)
-    down = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), False, None)]
-    assert "2.2.2.2" in s.decide(cfg, down)  # one miss tolerated
-    assert s.decide(cfg, down) == ["1.1.1.1"]  # second miss drops it
-
-
-def test_never_goes_dark():
-    probes = [Probe(_srv("a", "1.1.1.1"), True, 0.99)]  # overloaded, but the only node
     assert _settle(Steerer(), _cfg(), probes) == ["1.1.1.1"]
 
 
-def test_two_node_fleet_keeps_both_despite_gap():
-    # draining would leave a single point of failure, so a 2-node fleet holds both
+def test_only_one_ip_is_published():
     probes = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.6)]
-    assert set(_settle(Steerer(), _cfg(), probes, passes=5)) == {"1.1.1.1", "2.2.2.2"}
+    out = _settle(Steerer(), _cfg(), probes, passes=5)
+    assert out == ["1.1.1.1"]  # standby held in reserve, not round-robined
 
 
-def test_drains_heaviest_with_three_nodes():
+def test_three_nodes_still_single_primary():
     probes = [
         Probe(_srv("a", "1.1.1.1"), True, 0.1),
         Probe(_srv("b", "2.2.2.2"), True, 0.1),
         Probe(_srv("c", "3.3.3.3"), True, 0.6),
     ]
     out = _settle(Steerer(), _cfg(), probes, passes=5)
-    assert "3.3.3.3" not in out and {"1.1.1.1", "2.2.2.2"} <= set(out)
+    assert len(out) == 1 and out[0] in {"1.1.1.1", "2.2.2.2"}  # lightest, never the heavy node
+
+
+def test_primary_is_sticky_under_small_load_changes():
+    s, cfg = Steerer(), _cfg()
+    p = [Probe(_srv("a", "1.1.1.1"), True, 0.2), Probe(_srv("b", "2.2.2.2"), True, 0.1)]
+    assert _settle(s, cfg, p, 3) == ["2.2.2.2"]  # b lighter -> primary
+    # a is now the lighter one, but b is nowhere near overloaded: do NOT bounce
+    p2 = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
+    assert _settle(s, cfg, p2, 3) == ["2.2.2.2"]
+
+
+def test_primary_sheds_when_overloaded():
+    s, cfg = Steerer(), _cfg(threshold=0.3)
+    p = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
+    assert _settle(s, cfg, p, 3) == ["1.1.1.1"]  # a lighter -> primary
+    # a spikes well past threshold and b is far lighter -> hand off to b
+    p2 = [Probe(_srv("a", "1.1.1.1"), True, 0.99), Probe(_srv("b", "2.2.2.2"), True, 0.05)]
+    assert _settle(s, cfg, p2, 6) == ["2.2.2.2"]
+
+
+def test_primary_fails_over_after_two_misses():
+    s, cfg = Steerer(), _cfg()
+    up = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
+    assert _settle(s, cfg, up, 3) == ["1.1.1.1"]  # a is primary
+    down = [Probe(_srv("a", "1.1.1.1"), False, None), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
+    assert s.decide(cfg, down) == ["1.1.1.1"]  # one miss tolerated, primary held
+    assert s.decide(cfg, down) == ["2.2.2.2"]  # second miss -> fail over to the standby
+
+
+def test_never_goes_dark():
+    probes = [Probe(_srv("a", "1.1.1.1"), True, 0.99)]  # overloaded, but the only node
+    assert _settle(Steerer(), _cfg(), probes) == ["1.1.1.1"]
 
 
 def test_all_down_publishes_nothing():

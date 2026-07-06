@@ -1,12 +1,22 @@
-"""Steering loop: probe nodes, collect metrics, reconcile DNS with a smart policy.
+"""Steering loop: probe nodes, collect metrics, publish one active node in DNS.
 
-Rotation is not a plain in/out flip. Load is smoothed with an EWMA so a single
-spike doesn't yank a node; joining and leaving use a hysteresis band around the
-threshold so membership doesn't flap; a node has to miss two probes in a row to
-be treated as down (fast enough for failover, calm enough to ignore a blip);
-and when two live nodes drift far apart in load, the heavier one is drained from
-rotation so new handshakes land on the lighter one. The fleet never goes dark:
-if everything is loaded, the least-loaded node stays in.
+The policy is active-passive, not round-robin, and that is deliberate. Every
+node is a crypto-twin and NATs client traffic behind its *own* public IP
+(MASQUERADE), so a client's live connections are tied to whichever node it
+handshook with. On mobile the phone's IP changes constantly (CGNAT rebinds,
+tower handoffs); each change makes the app re-resolve the domain. If the domain
+carried several A records, that re-resolution could land the client on a
+*different* node mid-session and every NAT'd connection would break - the tunnel
+stays up but "everything drops." Publishing a single IP keeps a re-resolving
+client on the same node, so the session survives.
+
+So exactly one node is in DNS at a time: the lightest healthy one. Load is
+smoothed with an EWMA so a spike doesn't move it; the choice is sticky, so a
+small load wobble never bounces clients between nodes; the primary only sheds to
+another node when it is sustainedly overloaded *and* a clearly lighter node
+exists. Failover is fast: two missed probes in a row and the standby (already a
+warm crypto-twin carrying every peer) takes over. The fleet never goes dark - if
+the only node left is overloaded, it stays published.
 """
 
 from __future__ import annotations
@@ -21,9 +31,9 @@ from .models import FleetConfig
 from .stats import ONLINE_WINDOW, StatsDB
 
 EWMA_ALPHA = 0.4
-DOWN_STREAK_OUT = 2  # consecutive failed probes before a node leaves
-UP_STREAK_IN = 2  # consecutive healthy probes before a node may join
-DRAIN_GAP = 0.35  # score spread that triggers draining the heaviest node
+DOWN_STREAK_OUT = 2  # consecutive failed probes before the primary fails over
+UP_STREAK_IN = 2  # consecutive healthy probes before a node may become primary
+SHED_GAP = 0.35  # how much lighter another node must be before an overloaded primary hands off
 USER_WEIGHT = 0.02  # each connected user counts like this much CPU load in the score
 
 
@@ -35,7 +45,8 @@ class Steerer:
         self.users: dict[str, int] = {}
         self.up: dict[str, int] = {}
         self.down: dict[str, int] = {}
-        self.in_rot: set[str] = set()
+        self.primary: str | None = None  # the single host currently published in DNS
+        self.in_rot: set[str] = set()  # kept in sync with primary for the panel/meta
 
     def score(self, host: str) -> float:
         """A node's load, blending smoothed CPU with its live user count, so a
@@ -61,30 +72,27 @@ class Steerer:
                 self.down[h] = self.down.get(h, 0) + 1
                 self.up[h] = 0
 
-        rot = set(self.in_rot)
-        # leave: two missed probes, or sustained overload (upper hysteresis edge)
-        for h in list(rot):
-            if self.down.get(h, 0) >= DOWN_STREAK_OUT or self.score(h) >= thr * 1.1:
-                rot.discard(h)
-        # join: stable-healthy and comfortably under threshold (lower hysteresis edge)
-        for p in probes:
-            h = p.server.host
-            if p.alive and self.up.get(h, 0) >= UP_STREAK_IN and self.score(h) < thr * 0.9:
-                rot.add(h)
-        # never dark
-        if not rot:
-            alive = [p for p in probes if p.alive]
-            if alive:
-                rot = {min(alive, key=lambda p: self.score(p.server.host)).server.host}
-        # drain the heaviest when the spread is wide, but only with 3+ nodes:
-        # on a two-node fleet both stay in for redundancy.
-        if len(rot) >= 3:
-            scored = {h: self.score(h) for h in rot}
-            if max(scored.values()) - min(scored.values()) > DRAIN_GAP:
-                rot.discard(max(scored, key=scored.get))
+        alive = [p.server.host for p in probes if p.alive]
+        # a node must prove itself before it can be trusted as primary; fall back
+        # to any live node so a cold fleet still comes up on its first good probe
+        ready = [h for h in alive if self.up.get(h, 0) >= UP_STREAK_IN] or alive
 
-        self.in_rot = rot
-        return sorted(rot)
+        prim = self.primary
+        prim_ok = prim is not None and self.down.get(prim, 0) < DOWN_STREAK_OUT
+        if not prim_ok:
+            # cold start or failover: the primary is gone, take the lightest node
+            self.primary = min(ready, key=self.score) if ready else None
+        elif self.score(prim) >= thr * 1.1:
+            # primary sustainedly overloaded: shed, but only to a clearly lighter
+            # node (hysteresis) so a wobble never bounces everyone between nodes
+            best = min(ready, key=self.score)
+            if best != prim and self.score(prim) - self.score(best) > SHED_GAP:
+                self.primary = best
+        # otherwise keep the current primary: stickiness is the whole point, so a
+        # mobile client that re-resolves mid-session lands on the same node again
+
+        self.in_rot = {self.primary} if self.primary else set()
+        return [self.primary] if self.primary else []
 
 
 @dataclass
