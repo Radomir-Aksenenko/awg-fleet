@@ -24,6 +24,9 @@ class Server:
     # the best reachability (e.g. one IP is throttled on some mobile carrier)
     # while keeping the others as failover.
     priority: int = 0
+    # Relative capacity for client placement: a box with double the bandwidth /
+    # cores gets weight 2.0 and is assigned twice the clients.
+    weight: float = 1.0
 
 
 @dataclass
@@ -37,6 +40,15 @@ class Client:
     address: str  # e.g. "10.8.0.2/32"
     preshared_key: Optional[str] = None
     created_at: str = ""
+    # The node this client is pinned to: their traffic always egresses here (one
+    # stable public IP for IP-bound sessions), whichever node DNS hands them.
+    # Empty = legacy client that just follows the shared domain record.
+    node_host: str = ""
+    # Personal endpoint port on the shared domain. DNS cannot tell clients
+    # apart, but every node can: the port identifies the client, so any node
+    # answers a client pinned to it and relays everyone else to their node.
+    # 0 = legacy client on the plain listen_port.
+    port: int = 0
 
 
 @dataclass
@@ -55,5 +67,6 @@ class FleetConfig:
     mtu: int = 1200  # low by design: outer packet stays ~1260, fits mobile/CGNAT path MTUs
     load_threshold: float = 0.85  # normalized loadavg above which a node leaves rotation
     health_interval: int = 30  # seconds between reconcile passes
+    steer_port_base: int = 40000  # client ports = base + offset of their tunnel address
     servers: list = field(default_factory=list)  # list[Server]
     clients: list = field(default_factory=list)  # list[Client]

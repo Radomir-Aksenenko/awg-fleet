@@ -45,17 +45,25 @@ async def upload_text(server: Server, remote_path: str, content: str) -> None:
 async def upload_and_run(
     server: Server, remote_path: str, content: str, command: str, timeout: float = 90.0
 ) -> str:
-    """One SSH connection: make the parent dir, write the file, run the command.
+    """One SSH connection: make the parent dir, write the file, run the command."""
+    return await upload_files_and_run(server, {remote_path: content}, command, timeout)
+
+
+async def upload_files_and_run(
+    server: Server, files: dict[str, str], command: str, timeout: float = 90.0
+) -> str:
+    """One SSH connection: make parent dirs, write every file, run the command.
 
     Folding these into a single connection matters for latency: a config push is
-    otherwise four separate SSH handshakes per node."""
-    parent = remote_path.rsplit("/", 1)[0]
+    otherwise several separate SSH handshakes per node."""
+    parents = sorted({p.rsplit("/", 1)[0] for p in files if "/" in p})
     async with asyncssh.connect(**_connect_kwargs(server)) as conn:
-        if parent:
-            await conn.run(f"mkdir -p {parent}", check=False)
+        if parents:
+            await conn.run("mkdir -p " + " ".join(parents), check=False)
         async with conn.start_sftp_client() as sftp:
-            async with sftp.open(remote_path, "w") as f:
-                await f.write(content)
+            for remote_path, content in files.items():
+                async with sftp.open(remote_path, "w") as f:
+                    await f.write(content)
         result = await asyncio.wait_for(conn.run(command, check=False), timeout=timeout)
         if result.exit_status != 0:
             raise RuntimeError(

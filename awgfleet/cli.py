@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import typer
 
 from . import __version__
-from .clients import add_client, remove_client, write_client_bundle
+from .clients import add_client, pick_node, remove_client, write_client_bundle
 from .cloudflare import Cloudflare
 from .controller import ReconcileResult, Steerer, reconcile_once, run_controller
 from .stats import StatsDB
@@ -95,6 +95,7 @@ def server_add(
     user: str = typer.Option("root"),
     ssh_port: int = typer.Option(22),
     region: str = typer.Option(""),
+    weight: float = typer.Option(1.0, help="Relative capacity: 2.0 takes twice the clients"),
 ):
     """Add a node, install AmneziaWG on it and push the shared config."""
     st, cfg = _load()
@@ -104,6 +105,7 @@ def server_add(
     srv = Server(
         name=name, host=host, ssh_user=user, ssh_port=ssh_port,
         ssh_password=password, ssh_key_path=key, region=region,
+        weight=weight if weight > 0 else 1.0,
     )
     typer.echo(f"provisioning {name} ({host}) ...")
     asyncio.run(provision_server(srv, cfg))
@@ -157,12 +159,18 @@ def client_add(
 ):
     """Create a client, mirror it to every node and emit its config bundle."""
     st, cfg = _load()
+    stats = StatsDB()
+    by_name = {s.name: s.host for s in cfg.servers}
+    load_by_host = {by_name[n]: v for n, v in stats.get_meta("load", {}).items() if n in by_name}
+    alive_by_host = {by_name[n]: v for n, v in stats.get_meta("alive", {}).items() if n in by_name}
+    node = pick_node(cfg, load_by_host, alive_by_host)
     try:
-        client = add_client(cfg, name, created_at=_now(), use_psk=not no_psk)
+        client = add_client(cfg, name, created_at=_now(), use_psk=not no_psk, node_host=node)
     except ValueError as exc:
         typer.secho(str(exc), fg="red")
         raise typer.Exit(1)
-    typer.echo(f"added {name} as {client.address}; syncing nodes ...")
+    node_name = next((s.name for s in cfg.servers if s.host == node), node) or "(no nodes: domain only)"
+    typer.echo(f"added {name} as {client.address} -> node {node_name}; syncing nodes ...")
     asyncio.run(_sync_all(cfg))
     st.save()
     files = write_client_bundle(cfg, client, out_dir=out)

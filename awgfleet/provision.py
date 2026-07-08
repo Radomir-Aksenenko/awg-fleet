@@ -9,8 +9,13 @@ need the install block adjusted.
 from __future__ import annotations
 
 from .models import FleetConfig, Server
-from .render import render_server_conf
-from .ssh import run_ssh, upload_and_run
+from .render import (
+    STEER_SCRIPT_PATH,
+    render_server_conf,
+    render_steering_script,
+    render_steering_teardown,
+)
+from .ssh import run_ssh, upload_files_and_run
 
 REMOTE_CONF = "/etc/amnezia/amneziawg/awg0.conf"
 
@@ -63,17 +68,27 @@ async def push_config(server: Server, cfg: FleetConfig) -> None:
     lives outside the peer set, so syncconf won't touch it; we set it live with
     `ip link set` (also non-disruptive) so an MTU change reaches the fleet
     without a restart. A fresh node with no interface yet gets the full
-    `awg-quick up` (routes + PostUp)."""
+    `awg-quick up` (routes + PostUp).
+
+    The client-pinning script rides along and is applied in the same pass with
+    static pins (client -> its node); the controller overlays failover targets
+    on its own passes when a pinned node is down."""
     conf = render_server_conf(cfg)
+    steer = render_steering_script(
+        cfg, server.host, {c.port: c.node_host for c in cfg.clients if c.port and c.node_host}
+    )
     apply = (
         f"chmod 600 {REMOTE_CONF}; "
         "if ip link show awg0 >/dev/null 2>&1; then "
         "awg-quick strip awg0 > /tmp/awg0.sync 2>/dev/null "
         "&& awg syncconf awg0 /tmp/awg0.sync; rm -f /tmp/awg0.sync; "
         f"ip link set dev awg0 mtu {cfg.mtu} 2>/dev/null || true; "
-        "else systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; awg-quick up awg0; fi"
+        "else systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true; awg-quick up awg0; fi; "
+        f"sh {STEER_SCRIPT_PATH}"
     )
-    await upload_and_run(server, REMOTE_CONF, conf, apply, timeout=90.0)
+    await upload_files_and_run(
+        server, {REMOTE_CONF: conf, STEER_SCRIPT_PATH: steer}, apply, timeout=90.0
+    )
 
 
 async def provision_server(server: Server, cfg: FleetConfig) -> None:
@@ -86,6 +101,7 @@ async def teardown_server(server: Server) -> None:
         server,
         "awg-quick down awg0 >/dev/null 2>&1 || true; "
         "systemctl disable awg-quick@awg0 >/dev/null 2>&1 || true; "
-        f"rm -f {REMOTE_CONF}",
+        f"{render_steering_teardown()}; "
+        f"rm -f {REMOTE_CONF} {STEER_SCRIPT_PATH}",
         timeout=60.0,
     )

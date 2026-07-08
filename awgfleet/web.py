@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from .clients import add_client, qr_png, remove_client, vpn_qr_series, vpn_uri
+from .clients import add_client, pick_node, qr_png, remove_client, vpn_qr_series, vpn_uri
 from .models import Server
 from .provision import provision_server, push_config, teardown_server
 from .render import render_client_conf
@@ -53,6 +53,10 @@ async def status():
     rotation = _stats.get_meta("rotation", [])
     load = _stats.get_meta("load", {})
     alive = _stats.get_meta("alive", {})
+    assigned: dict[str, int] = {}
+    for c in cfg.clients:
+        if c.node_host:
+            assigned[c.node_host] = assigned.get(c.node_host, 0) + 1
     servers = []
     for s in cfg.servers:
         servers.append(
@@ -64,8 +68,11 @@ async def status():
                 "load": load.get(s.name),
                 "in_rotation": s.name in rotation,
                 "users": _stats.node_users(s.name),
+                "assigned": assigned.get(s.host, 0),
+                "weight": s.weight,
             }
         )
+    name_by_host = {s.host: s.name for s in cfg.servers}
     clients = []
     online = 0
     for c in cfg.clients:
@@ -82,6 +89,7 @@ async def status():
                 "tx": d["tx"],
                 "last_seen": d["last_seen"],
                 "favorite": d["favorite"],
+                "node": name_by_host.get(c.node_host, "") if c.node_host else "",
             }
         )
     return {
@@ -132,6 +140,7 @@ class ServerIn(BaseModel):
     user: str = "root"
     ssh_port: int = 22
     region: str = ""
+    weight: float = 1.0  # relative capacity: 2.0 = takes twice the clients
 
 
 @app.post("/api/servers")
@@ -149,6 +158,7 @@ async def add_server(body: ServerIn):
             ssh_password=body.password or None,
             ssh_key_path=body.key_path or None,
             region=body.region,
+            weight=body.weight if body.weight > 0 else 1.0,
         )
         try:
             await provision_server(srv, cfg)
@@ -188,22 +198,35 @@ async def _sync_all(cfg) -> list[str]:
     return [f"{s.name}: {r}" for s, r in zip(targets, results) if isinstance(r, Exception)]
 
 
+def _host_metrics(cfg):
+    """Live load / alive keyed by host (the stats DB keys by node name)."""
+    load = _stats.get_meta("load", {})
+    alive = _stats.get_meta("alive", {})
+    by_name = {s.name: s.host for s in cfg.servers}
+    load_by_host = {by_name[n]: v for n, v in load.items() if n in by_name}
+    alive_by_host = {by_name[n]: v for n, v in alive.items() if n in by_name}
+    return load_by_host, alive_by_host
+
+
 @app.post("/api/clients")
 async def create_client(body: ClientIn):
     async with _lock:
         st = _load()
         cfg = st.config
+        load_by_host, alive_by_host = _host_metrics(cfg)
+        node = pick_node(cfg, load_by_host, alive_by_host)
         try:
             add_client(
                 cfg,
                 body.name,
                 created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                node_host=node,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         warnings = await _sync_all(cfg)
         st.save()
-    return {"ok": True, "warnings": warnings}
+    return {"ok": True, "warnings": warnings, "node": node}
 
 
 @app.delete("/api/clients/{name}")

@@ -1,6 +1,6 @@
-"""Every client lives on the one bare domain; balancing is done by moving its
-A record, so nothing here (config, vpn:// blob, state) may ever grow a
-per-client hostname again."""
+"""Every client lives on the one bare domain — identity travels in the port,
+never in the hostname — so nothing here (config, vpn:// blob, state) may ever
+grow a per-client subdomain again."""
 
 import json
 

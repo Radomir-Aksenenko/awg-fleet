@@ -7,10 +7,11 @@ A WireGuard/AmneziaWG client config pins a single `Endpoint` and a single server
 with the **same** server private key and the **same** set of peers. From a
 client's point of view there is one server that happens to answer on several IPs.
 
-The consequence is that steering becomes a pure DNS problem: whichever node IP
-is published under the domain is the one new handshakes reach. There is no
-per-node key negotiation to coordinate, and every client shares the one bare
-domain — no per-client subdomains, no static client→node assignment.
+There is no per-node key negotiation to coordinate, and every client shares
+the one bare domain — no per-client subdomains. What tells clients apart is
+the **port**: DNS queries are anonymous, so identity can't live in the
+hostname resolution, but every packet that reaches any node carries the
+client's personal endpoint port, and that is enough to steer them.
 
 ## State
 
@@ -18,8 +19,8 @@ domain — no per-client subdomains, no static client→node assignment.
 
 - the shared server keypair and obfuscation parameters (`Jc/Jmin/Jmax/S1/S2/H1..H4`);
 - the tunnel subnet, MTU, listen port, DNS;
-- the list of nodes (host + SSH credentials + region);
-- the list of clients (keypair + allocated `/32`).
+- the list of nodes (host + SSH credentials + region + capacity weight);
+- the list of clients (keypair + allocated `/32` + pinned node + personal port).
 
 Address allocation is deterministic: the gateway takes the first host of the
 subnet, clients take the lowest free `/32` after it.
@@ -31,7 +32,7 @@ subnet, clients take the lowest free `/32` after it.
 | `keys.py` | Curve25519 keypairs, pre-shared keys, AmneziaWG obfuscation params |
 | `models.py` | `Server`, `Client`, `FleetConfig` dataclasses |
 | `state.py` | Atomic load/save of `state.json` |
-| `render.py` | Render server and client AmneziaWG config text |
+| `render.py` | Render server/client AmneziaWG configs and the per-node steering rules |
 | `ssh.py` | Async SSH exec and SFTP upload (asyncssh) |
 | `provision.py` | Install AmneziaWG on a node, push the shared config |
 | `clients.py` | Allocate address, add/remove client, emit `.conf` / QR / link |
@@ -48,7 +49,33 @@ clamping means large packets never fragment into a black hole, which is the exac
 failure that makes "the VPN loads pages but never loads video" on resellers whose
 real path MTU is below 1500.
 
-## Steering loop
+## Client pinning: one domain, a port per client
+
+A new client is pinned to the node with the fewest clients per unit of
+capacity `weight` (ties broken by live load) and gets endpoint
+`<domain>:<steer_port_base + address offset>`. Every node then runs the same
+steering rule set (dedicated iptables chains, rebuilt idempotently):
+
+- a port pinned **here** → `REDIRECT` to the real listen port (answered locally);
+- any other port → `DNAT` to its owner's node (+ `MASQUERADE`, so replies
+  return along the same path).
+
+So whichever node DNS hands a client, their tunnel terminates on — and their
+traffic egresses from — their own node. Reconnects and even mid-session DNS
+moves keep the same public IP, which is what keeps IP-bound sessions (banks,
+logins) alive. The relay sees only AmneziaWG UDP; the crypto is end-to-end
+between client and the shared server identity.
+
+The rules ride with `awg0.conf` on every sync (`steer.sh`, re-applied by
+PostUp after a reboot). The controller overlays failover on each pass: a
+pinned node that misses two probes gets its clients' ports repointed at the
+lightest live node — the only moment a client's egress IP can change — and
+pointed home again on recovery. Rules are pushed only to nodes whose script
+actually changed, so a steady fleet costs zero SSH calls per pass.
+
+## Steering loop (DNS)
+
+DNS's remaining job is picking a live, light *entrance*:
 
 ```
 every health_interval seconds:
@@ -56,26 +83,22 @@ every health_interval seconds:
     score   = EWMA(cpu load) + USER_WEIGHT * connected users, per node
     primary = current published node
     if primary missed 2 probes:            primary = best healthy node
-    elif another node is lighter by GAP:   primary = that node   # the balancing
+    elif another node is lighter by GAP:   primary = that node
     elif primary overloaded and a node is lighter by GAP: shed to it
     reconcile A(domain) == {primary}                       # exactly one record
+    reconcile steering rules on every live node            # see pinning above
 ```
 
-Exactly one A record is published: the least-loaded node, i.e. where the next
-connection should land. New clients naturally pile onto it, its user-count term
-grows, and once another node is lighter by the gap the record moves on — the
-fleet fills evenly without any client being told about nodes. The gap plus the
-EWMA is the hysteresis: a load wobble never bounces the record. The record is
-never published empty while any node is alive: a slightly stale record still
-routes, an empty record does not.
-
-Already-connected clients are untouched by a record move (WireGuard keeps the
-resolved IP for the session), so balancing acts purely on new and renewed
-handshakes.
+The gap plus the EWMA is the hysteresis: a load wobble never bounces the
+record, and a record move never breaks anyone — packets that land on the new
+entrance are relayed to each client's pinned node like any others. The record
+is never published empty while any node is alive: a slightly stale record
+still routes, an empty record does not.
 
 On startup the controller sweeps up `nX.<domain>` records left behind by the
-old per-client steering scheme; clients issued under that scheme need their
-config re-issued once, since the subdomain is baked into it.
+old per-client-subdomain scheme; clients issued under that scheme (or before
+pinning) keep working as plain domain-followers and get pinned when their
+config is re-issued.
 
 ## Where it can grow
 

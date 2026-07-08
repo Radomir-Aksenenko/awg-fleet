@@ -8,7 +8,46 @@ import ipaddress
 
 from .keys import generate_keypair, generate_preshared_key
 from .models import Client, FleetConfig
-from .render import render_client_conf
+from .render import client_endpoint_port, render_client_conf
+
+
+def pick_node(
+    cfg: FleetConfig,
+    load_by_host: dict[str, float] | None = None,
+    alive_by_host: dict[str, bool] | None = None,
+) -> str:
+    """The node a new client gets pinned to: fewest assigned clients per unit of
+    capacity weight, ties broken by live load. A box with weight 2.0 (double the
+    bandwidth/cores) therefore fills with twice the clients before the next one
+    ranks equal. Down nodes are skipped when we know their state."""
+    load_by_host = load_by_host or {}
+    alive_by_host = alive_by_host or {}
+    counts: dict[str, int] = {}
+    for c in cfg.clients:
+        if c.node_host:
+            counts[c.node_host] = counts.get(c.node_host, 0) + 1
+    weights = {s.host: max(s.weight, 0.01) for s in cfg.servers}
+    candidates = [
+        s.host for s in cfg.servers if s.enabled and alive_by_host.get(s.host, True)
+    ]
+    if not candidates:  # nothing known-alive -> fall back to any enabled node
+        candidates = [s.host for s in cfg.servers if s.enabled]
+    if not candidates:
+        return ""
+    return min(
+        candidates,
+        key=lambda h: (counts.get(h, 0) / weights.get(h, 1.0), load_by_host.get(h, 0.0)),
+    )
+
+
+def allocate_port(cfg: FleetConfig, address: str) -> int:
+    """The client's personal endpoint port, derived from their tunnel address
+    offset so it is unique for as long as the address is. The port is the only
+    per-client bit in the endpoint (the domain is shared), and it is what lets
+    any node recognize the client and steer them to their pinned node."""
+    ip = ipaddress.ip_interface(address).ip
+    net = ipaddress.ip_network(cfg.subnet, strict=False)
+    return cfg.steer_port_base + int(ip) - int(net.network_address)
 
 
 def allocate_address(cfg: FleetConfig) -> str:
@@ -29,17 +68,23 @@ def add_client(
     name: str,
     created_at: str = "",
     use_psk: bool = True,
+    node_host: str = "",
 ) -> Client:
     if any(c.name == name for c in cfg.clients):
         raise ValueError(f"client {name!r} already exists")
     priv, pub = generate_keypair()
+    address = allocate_address(cfg)
     client = Client(
         name=name,
         private_key=priv,
         public_key=pub,
-        address=allocate_address(cfg),
+        address=address,
         preshared_key=generate_preshared_key() if use_psk else None,
         created_at=created_at,
+        node_host=node_host,
+        # the personal port only means something with a pin behind it; an
+        # unpinned client stays on the plain listen_port like a legacy one
+        port=allocate_port(cfg, address) if node_host else 0,
     )
     cfg.clients.append(client)
     return client
@@ -68,6 +113,7 @@ def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
 
     conf = render_client_conf(cfg, client)
     endpoint_host = cfg.domain
+    endpoint_port = client_endpoint_port(cfg, client)
     client_ip = str(ipaddress.ip_interface(client.address).ip)
     net = ipaddress.ip_network(cfg.subnet, strict=False)
     dns = [d.strip() for d in cfg.dns.split(",")] + ["8.8.8.8"]
@@ -84,14 +130,14 @@ def _amnezia_blob(cfg: FleetConfig, client: Client) -> bytes:
         "hostName": endpoint_host,
         "mtu": str(cfg.mtu),
         "persistent_keep_alive": "25",
-        "port": cfg.listen_port,
+        "port": endpoint_port,
         "psk_key": client.preshared_key or "",
         "server_pub_key": cfg.server_public_key,
     }
     awg = {
         **awg_params,
         "last_config": json.dumps(last_config, separators=(",", ":")),
-        "port": str(cfg.listen_port),
+        "port": str(endpoint_port),
         "protocol_version": "2",
         "subnet_address": str(net.network_address),
         "transport_proto": "udp",

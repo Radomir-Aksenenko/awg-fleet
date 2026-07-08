@@ -1,22 +1,20 @@
-"""Steering loop: probe nodes, collect metrics, keep the domain on the
-least-loaded node.
+"""Steering loop: probe nodes, collect metrics, keep every client on their node.
 
-Every client points at the same single domain — no per-client subdomains, no
-static assignment. The controller publishes exactly one A record under that
-domain: the lightest healthy node right now. New handshakes therefore always
-land on the least-loaded server, and as clients pile onto it and its score
-rises past another node's, the record moves on — today everyone new lands on
-node A, tomorrow on node B. Clients that are already connected stay where they
-are (WireGuard keeps the resolved IP for the session), so moving the record
-spreads *new* connections without kicking anyone off.
+Every client shares the one bare domain; what tells them apart is the personal
+port in their endpoint. Each client is pinned to a node (assigned at creation
+by capacity weight and headcount), and every node carries the same steering
+rule set: answer the clients pinned to me, relay everyone else's UDP to their
+node. So whichever node DNS happens to hand a client, their traffic always
+egresses from their own node's IP — reconnects, roaming, even the DNS record
+moving mid-session never change the address websites see, and IP-bound
+sessions survive. Only when a client's node is actually down does the
+controller repoint their port at a live stand-in (the address changes then;
+nothing can prevent that), and it points it home again on recovery.
 
-The load score blends smoothed CPU (EWMA, so a spike doesn't move the record)
-with the live user count (so a box busy on connections, not CPU, still reads
-as loaded). The record only moves when another node is lighter by a real
-margin — a small wobble never bounces it back and forth. Failover is fast: two
-missed probes and the standby (already a warm crypto-twin carrying every peer)
-takes over. The fleet never goes dark — if the only node left is overloaded,
-it stays published.
+DNS's only job left is picking a live, light entrance: one A record on the
+least-loaded healthy node, moved with hysteresis, never published empty. The
+load score blends smoothed CPU (EWMA) with live user count. Failover of the
+record is fast: two missed probes and a standby takes over.
 """
 
 from __future__ import annotations
@@ -29,6 +27,8 @@ from dataclasses import dataclass
 from .cloudflare import Cloudflare
 from .health import Probe, probe
 from .models import FleetConfig
+from .render import render_steering_script
+from .ssh import run_ssh
 from .stats import ONLINE_WINDOW, StatsDB
 
 EWMA_ALPHA = 0.4
@@ -49,6 +49,7 @@ class Steerer:
         self.prio: dict[str, int] = {}
         self.primary: str | None = None  # the single host currently published in DNS
         self.in_rot: set[str] = set()  # kept in sync with primary for the panel/meta
+        self.applied: dict[str, str] = {}  # host -> steering script last applied there
 
     def _best(self, hosts) -> str:
         """Highest priority first, then lightest score."""
@@ -125,6 +126,48 @@ class ReconcileResult:
     in_rotation: list[str]
 
 
+def steering_targets(cfg: FleetConfig, alive_hosts: set[str], score) -> dict[int, str]:
+    """Where each pinned client's port should point right now: their own node
+    while it is alive, otherwise the lightest live node as a stand-in. `score`
+    ranks the stand-in candidates (the steerer's blended load)."""
+    fallback = min(alive_hosts, key=score) if alive_hosts else None
+    targets: dict[int, str] = {}
+    for c in cfg.clients:
+        if not c.port or not c.node_host:
+            continue
+        target = c.node_host if c.node_host in alive_hosts else fallback
+        if target:
+            targets[c.port] = target
+    return targets
+
+
+async def _apply_steering(cfg: FleetConfig, steerer: Steerer, probes: list[Probe]) -> None:
+    """Push the steering rules to every live node whose rules are stale.
+
+    The script is its own change-token: a node is touched only when the script
+    for it differs from what it last acknowledged, so a steady fleet costs zero
+    SSH calls per pass. A node that dies is forgotten and re-pushed on
+    recovery, because a reboot wipes iptables state."""
+    alive = {p.server.host: p.server for p in probes if p.alive}
+    for host in list(steerer.applied):
+        if host not in alive:
+            steerer.applied.pop(host)
+    targets = steering_targets(cfg, set(alive), steerer.score)
+    pending = []
+    for host, server in alive.items():
+        script = render_steering_script(cfg, host, targets)
+        if steerer.applied.get(host) != script:
+            pending.append((server, script))
+    if not pending:
+        return
+    results = await asyncio.gather(
+        *(run_ssh(s, script) for s, script in pending), return_exceptions=True
+    )
+    for (server, script), r in zip(pending, results):
+        if not isinstance(r, Exception):  # a failed node stays stale -> retried next pass
+            steerer.applied[server.host] = script
+
+
 async def reconcile_once(cfg: FleetConfig, cf: Cloudflare, steerer: Steerer, stats: StatsDB) -> ReconcileResult:
     active = [s for s in cfg.servers if s.enabled]
     probes = list(await asyncio.gather(*(probe(s) for s in active))) if active else []
@@ -140,6 +183,11 @@ async def reconcile_once(cfg: FleetConfig, cf: Cloudflare, steerer: Steerer, sta
     ips = steerer.decide(cfg, probes)
     if ips:  # never publish an empty set; a stale record still routes
         cf.reconcile_a_records(cfg.cf_zone_id, cfg.domain, ips, ttl=60)
+
+    try:  # keep every pinned client's port answered somewhere live
+        await _apply_steering(cfg, steerer, probes)
+    except Exception:
+        pass  # never let a steering hiccup take down the DNS/metrics pass
 
     name_by_host = {s.host: s.name for s in cfg.servers}
     stats.set_meta(

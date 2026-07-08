@@ -137,13 +137,14 @@
   <section>
     <div class="head"><h2>Nodes</h2><span class="count" id="nodeCount"></span><span class="sub" style="margin-left:auto">click a node for its graph</span></div>
     <table>
-      <thead><tr><th>Name</th><th>Host</th><th>Region</th><th>Status</th><th>Load</th><th>Users</th><th>Rotation</th><th></th></tr></thead>
-      <tbody id="nodes"><tr><td colspan="8" class="empty">loading…</td></tr></tbody>
+      <thead><tr><th>Name</th><th>Host</th><th>Region</th><th>Status</th><th>Load</th><th>Users</th><th>Assigned</th><th>Rotation</th><th></th></tr></thead>
+      <tbody id="nodes"><tr><td colspan="9" class="empty">loading…</td></tr></tbody>
     </table>
     <form class="add" id="addServer">
       <input name="name" placeholder="name (de3)" required style="flex:0 0 110px"/>
       <input name="host" placeholder="host / IP" required class="grow"/>
       <input name="region" placeholder="region" style="flex:0 0 84px"/>
+      <input name="weight" placeholder="weight (1)" type="number" step="0.5" min="0.5" style="flex:0 0 92px" title="relative capacity: 2 takes twice the clients"/>
       <input name="password" placeholder="root password" type="password" class="grow"/>
       <button class="btn primary" type="submit">Add node</button>
     </form>
@@ -152,8 +153,8 @@
   <section>
     <div class="head"><h2>Clients</h2><span class="count" id="clientCount"></span><span class="sub" style="margin-left:auto">click a client for stats + config</span></div>
     <table>
-      <thead><tr><th>Name</th><th>Address</th><th>Status</th><th>Traffic</th><th>Last seen</th><th>Favourite</th><th></th></tr></thead>
-      <tbody id="clients"><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
+      <thead><tr><th>Name</th><th>Address</th><th>Status</th><th>Traffic</th><th>Last seen</th><th>Node</th><th>Favourite</th><th></th></tr></thead>
+      <tbody id="clients"><tr><td colspan="8" class="empty">loading…</td></tr></tbody>
     </table>
     <form class="add" id="addClient">
       <input name="name" placeholder="client name (iphone)" required class="grow"/>
@@ -207,18 +208,20 @@ async function refresh(){
       <td data-label="Name"><b>${esc(s.name)}</b></td><td data-label="Host" class="mono">${esc(s.host)}</td><td data-label="Region" class="muted">${esc(s.region)||'—'}</td>
       <td data-label="Status"><span class="dot ${s.alive?'up':'down'}"></span>${s.alive===false?'down':(s.alive?'up':'?')}</td>
       <td data-label="Load">${fmtLoad(s.load)}</td><td data-label="Users">${s.users}</td>
+      <td data-label="Assigned">${s.assigned??0}${s.weight&&s.weight!=1?' <span class="muted">×'+s.weight+'</span>':''}</td>
       <td data-label="Rotation">${s.in_rotation?'<span class="badge rot">in rotation</span>':'<span class="badge">out</span>'}</td>
       <td class="rowbtns"><button class="btn ghost danger" onclick="event.stopPropagation();rmServer('${esc(s.name)}')">remove</button></td>
-    </tr>`).join(''):'<tr><td colspan="8" class="empty">no nodes yet</td></tr>';
+    </tr>`).join(''):'<tr><td colspan="9" class="empty">no nodes yet</td></tr>';
   $('#clients').innerHTML=d.clients.length?d.clients.map(c=>`
     <tr class="clk" onclick="clientModal('${esc(c.name)}')">
       <td data-label="Name"><b>${esc(c.name)}</b></td><td data-label="Address" class="mono">${esc(c.address)}</td>
       <td data-label="Status"><span class="dot ${c.online?'up':'off'}"></span>${c.online?'online':'offline'}</td>
       <td data-label="Traffic" class="muted">${bytes(c.rx+c.tx)}</td><td data-label="Last seen" class="muted">${ago(c.last_seen)}</td>
+      <td data-label="Node">${c.node?'<span class="badge rot">'+esc(c.node)+'</span>':'<span class="badge">domain</span>'}</td>
       <td data-label="Favourite" class="muted">${esc(c.favorite)||'—'}</td>
       <td class="rowbtns"><button class="btn" onclick="event.stopPropagation();clientModal('${esc(c.name)}')">config</button>
         <button class="btn ghost danger" onclick="event.stopPropagation();rmClient('${esc(c.name)}')">remove</button></td>
-    </tr>`).join(''):'<tr><td colspan="7" class="empty">no clients yet</td></tr>';
+    </tr>`).join(''):'<tr><td colspan="8" class="empty">no clients yet</td></tr>';
   try{const ov=await api('GET','/api/overview');$('#ovChart').innerHTML=lineChart(ov.series,600,110,'var(--accent)')}catch(e){}
 }
 
@@ -300,7 +303,7 @@ async function serverModal(name){
 
 // ---- forms ----
 $('#addServer').onsubmit=async e=>{e.preventDefault();const f=e.target,b=f.querySelector('button');
-  const body={name:f.name.value.trim(),host:f.host.value.trim(),region:f.region.value.trim(),password:f.password.value};
+  const body={name:f.name.value.trim(),host:f.host.value.trim(),region:f.region.value.trim(),password:f.password.value,weight:parseFloat(f.weight.value)||1};
   b.disabled=true;b.innerHTML='<span class="spin"></span> provisioning…';
   try{await api('POST','/api/servers',body);f.reset();toast('node '+body.name+' added');await refresh()}
   catch(err){toast(err.message,true)}finally{b.disabled=false;b.textContent='Add node'}};

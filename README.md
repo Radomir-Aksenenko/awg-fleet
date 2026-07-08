@@ -2,25 +2,25 @@
 
 **One AmneziaWG config. A whole fleet of servers behind it.**
 
-You hand out a single client config on a single domain — every client gets the
-same endpoint, no subdomains, no "pick a server" list. Behind that domain sits
-a pool of AmneziaWG nodes. awg-fleet health-checks them and keeps the domain's
-one A record on whichever node is least loaded right now, so each new
-connection lands on the lightest server — today that's node A, tomorrow node B.
-If a node dies or gets blocked, the record moves within a minute and clients
-roll onto another node without touching their config.
+You hand out client configs on a single shared domain — no subdomains, no
+"pick a server" list. Each client is pinned to a node at creation, weighted by
+the node's capacity, and their traffic **always** egresses from that node's IP:
+whichever node DNS happens to hand them, the fleet recognizes the client by the
+personal port in their endpoint and relays them home. Reconnects, roaming, DNS
+moves — websites keep seeing the same address, so IP-bound sessions survive.
+Only if a client's node actually dies is their port repointed at a live node
+(and pointed home again on recovery), without touching their config.
 
 ```
-                    vpn.example.com  (one A record, low TTL,
-                          │           always the lightest node)
-              ┌───────────┴───────────┬──────────────────┐
-              ▼                       ▼                  ▼
-        ┌──────────┐            ┌──────────┐       ┌──────────┐
-        │  node 1  │            │  node 2  │       │  node 3  │   ← crypto-twins:
-        │ AmneziaWG│            │ AmneziaWG│       │ AmneziaWG│     same server keys,
-        └──────────┘            └──────────┘       └──────────┘     same peer list
-              ▲                       ▲                  ▲
-              └── controller: probe load + move the record ──┘
+              vpn.example.com  (one A record: a live, light entrance)
+                                    │
+        client :40007  ─────────────┤ any node recognizes the port
+                                    ▼
+        ┌──────────┐          ┌──────────┐          ┌──────────┐
+        │  node 1  │ ◄─relay─ │  node 2  │          │  node 3  │  ← crypto-twins:
+        │ AmneziaWG│          │ AmneziaWG│          │ AmneziaWG│    same server keys,
+        └────┬─────┘          └──────────┘          └──────────┘    same peer list
+             ▼ egress: always node 1's IP for client :40007
 ```
 
 ## Why this exists
@@ -36,13 +36,19 @@ domain at a different node is all it takes to send new connections there.
 
 ## What it does
 
-- **One config for the whole fleet.** Every client points at the same bare
-  domain, never at a node and never at a per-client subdomain.
-- **Load balancing at connect time.** The domain always resolves to the least
-  loaded node, so whoever connects next lands on the lightest server. As users
-  pile onto it, the record moves on and the fleet fills evenly.
-- **Automatic failover.** Two missed probes and the record is on another node;
-  reconnecting clients follow it without touching their config.
+- **One domain for everyone.** Every client points at the same bare domain;
+  the only per-client bit is the port, which is how the fleet tells them apart
+  (DNS can't — a DNS query is anonymous).
+- **Capacity-weighted placement.** A new client lands on the node with the
+  fewest clients per unit of `weight` (set weight 2.0 on a box with double the
+  bandwidth and it takes twice the people), ties broken by live load.
+- **One stable egress IP per client.** Wherever DNS sends a client, the
+  receiving node answers them if they're pinned there and relays them to their
+  node otherwise — so their sessions, logins and IP-bound state never notice a
+  reconnect.
+- **Automatic failover.** Two missed probes and a dead node's clients are
+  repointed at a live one within a pass — configs untouched; they return home
+  when the node recovers.
 - **MTU-safe by construction.** Tunnel MTU is pinned low and every node clamps
   TCP MSS to the path, so large packets (media, video, QUIC) never black-hole
   behind a reseller that quietly delivers a sub-1500 path.
@@ -86,31 +92,35 @@ currently published to the domain.
 
 ## How steering decides
 
-Each pass (`health_interval`, default 30s):
+Placement happens once, when a client is created: they're pinned to the node
+with the fewest clients per unit of capacity weight (ties broken by live
+load), and their endpoint becomes `domain:personal-port`.
 
-1. probe every node: TCP liveness, normalized `loadavg`, and how many clients
-   are currently connected to it;
-2. score each node: smoothed CPU load plus a weight per connected user, so a
-   box that is busy on connections (not CPU) still reads as loaded;
-3. publish the single lightest healthy node under the domain (grey-cloud,
-   low TTL) — the record only moves when another node is lighter by a real
-   margin, so it never flaps on a wobble;
-4. if the published node misses two probes in a row, fail over to the best
-   remaining node at once; if the only node left is overloaded, keep it
-   published — the fleet never goes dark.
+Each controller pass (`health_interval`, default 30s):
 
-WireGuard keeps the resolved IP for the life of a session, so a client that is
-**already** connected stays on its node; the record steers whoever connects
-*next*. That is what balances the fleet: new connections land on the lightest
-node until it stops being the lightest, then the record moves on.
+1. probe every node: TCP liveness, normalized `loadavg`, connected clients;
+2. keep every node's steering rules current: a node answers the ports of
+   clients pinned to it and relays every other port to its owner's node
+   (plain DNAT — the tunnel crypto is end-to-end, relays can't see inside);
+   rules are only pushed when they actually change;
+3. if a pinned node is down (two missed probes), its clients' ports are
+   repointed at the lightest live node — their egress IP changes, which is the
+   one case nothing can prevent — and pointed home when it recovers;
+4. keep the domain's single A record on a live, light node (grey-cloud, low
+   TTL, moved with hysteresis, never published empty) — it only decides which
+   node *receives* a client's packets, not which node carries them.
 
 ## Honest limitations
 
 - **Shared keys** mean compromise of one node exposes the tunnel. Fine for a
   personal or small-team fleet; not a multi-tenant isolation model.
-- **Balancing acts on new connections only.** DNS cannot move a live tunnel, so
-  an already-connected client stays put until it reconnects. Over hours the
-  fleet evens out; it cannot rebalance a spike instantly.
+- **Relaying costs a hop.** When DNS hands a client a node other than their
+  own, that node forwards the UDP to the right one: a few extra milliseconds
+  and double bandwidth on the entry node for that client's traffic.
+- **Placement is per-client, not per-packet.** The fleet balances by putting
+  people on the right node up front (and by capacity weight), not by moving a
+  live client around — moving them would change their IP, which is exactly
+  what pinning exists to avoid.
 - **Provisioning targets Ubuntu 22.04 / 24.04** via the AmneziaWG PPA. Other
   distros need the install block in `provision.py` adjusted.
 - **Health is indirect.** UDP AmneziaWG cannot be hand-shaken without keys, so a
