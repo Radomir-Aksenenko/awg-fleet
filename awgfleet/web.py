@@ -193,6 +193,26 @@ async def add_server(body: ServerIn):
     return {"ok": True, "weight": srv.weight, "bench": srv.bench}
 
 
+@app.post("/api/servers/{name}/bench")
+async def bench_server(name: str):
+    """Re-measure one node's capacity now and refresh its placement weight."""
+    async with _lock:
+        st = _load()
+        cfg = st.config
+        srv = next((s for s in cfg.servers if s.name == name), None)
+        if not srv:
+            raise HTTPException(404, "no such server")
+        try:
+            bench = await benchmark_server(srv)
+        except Exception as exc:
+            raise HTTPException(502, f"benchmark failed: {exc}")
+        if not bench:
+            raise HTTPException(502, "benchmark unusable (curl missing or speedtest unreachable)")
+        apply_bench(srv, bench)
+        st.save()
+    return {"ok": True, "weight": srv.weight, "bench": srv.bench}
+
+
 @app.delete("/api/servers/{name}")
 async def remove_server(name: str):
     async with _lock:

@@ -315,7 +315,18 @@ async function serverModal(name){
       <span class="k">Measured</span><span>${d.bench&&d.bench.at?esc(d.bench.cores+' cores · ↓'+d.bench.down_mbps+' / ↑'+d.bench.up_mbps+' Mbit')+' <span class="muted">('+ago(Math.floor(new Date(d.bench.at).getTime()/1000))+')</span>':'<span class="muted">not yet (weekly, Mon 00:00 KRSK)</span>'}</span>
     </div>
     <div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Users on this node · last 6h</div>
-    <svg class="chart" viewBox="0 0 600 110" preserveAspectRatio="none">${lineChart(d.series,600,110,'var(--blue)')}</svg>`);
+    <svg class="chart" viewBox="0 0 600 110" preserveAspectRatio="none">${lineChart(d.series,600,110,'var(--blue)')}</svg>
+    <div class="rowbtns" style="margin-top:10px">
+      <button class="btn" id="benchBtn" onclick="benchServer('${esc(name)}')">Re-measure capacity (~30s)</button>
+    </div>`);
+}
+async function benchServer(name){
+  const b=$('#benchBtn');if(b){b.disabled=true;b.innerHTML='<span class="spin"></span> measuring…'}
+  try{
+    const r=await api('POST','/api/servers/'+encodeURIComponent(name)+'/bench');
+    toast(`${name}: ${r.bench.cores} cores · ↓${r.bench.down_mbps} / ↑${r.bench.up_mbps} Mbit → weight ${r.weight}`);
+    await refresh();serverModal(name);
+  }catch(e){toast(e.message,true);if(b){b.disabled=false;b.textContent='Re-measure capacity (~30s)'}}
 }
 
 // ---- forms ----
