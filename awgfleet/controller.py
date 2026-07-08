@@ -24,6 +24,7 @@ import re
 import time
 from dataclasses import dataclass
 
+from .bench import apply_bench, bench_due, benchmark_server, last_bench_slot
 from .cloudflare import Cloudflare
 from .health import Probe, probe
 from .models import FleetConfig
@@ -200,6 +201,32 @@ async def reconcile_once(cfg: FleetConfig, cf: Cloudflare, steerer: Steerer, sta
     return ReconcileResult(probes=probes, in_rotation=ips)
 
 
+async def maybe_benchmark(state, probes: list[Probe]) -> list[str]:
+    """Re-measure node capabilities on the weekly schedule (Monday 00:00
+    Krasnoyarsk) and refresh placement weights. Only alive nodes whose last
+    benchmark predates the current slot are touched, so a node that slept
+    through Monday is measured as soon as it is seen alive, and nothing is
+    ever measured twice in one week. State is re-read right before saving so
+    a concurrent panel edit isn't clobbered. Returns the re-weighted names."""
+    slot = last_bench_slot()
+    due = [p.server for p in probes if p.alive and bench_due(p.server, slot)]
+    if not due:
+        return []
+    results = await asyncio.gather(*(benchmark_server(s) for s in due), return_exceptions=True)
+    fresh = state.load()
+    by_host = {s.host: s for s in fresh.servers}
+    changed = []
+    for server, bench in zip(due, results):
+        target = by_host.get(server.host)
+        if isinstance(bench, Exception) or bench is None or target is None:
+            continue  # unusable measurement -> keep the previous weight
+        apply_bench(target, bench)
+        changed.append(target.name)
+    if changed:
+        state.save()
+    return changed
+
+
 def cleanup_legacy_steering(cfg: FleetConfig, cf: Cloudflare) -> list[str]:
     """Delete the per-client nX.<domain> steering records an older awg-fleet
     published. All clients live on the bare domain now; leftover subdomains
@@ -228,6 +255,10 @@ async def run_controller(state, cf: Cloudflare, on_pass=None) -> None:
             cfg = state.load()
             interval = cfg.health_interval
             result = await reconcile_once(cfg, cf, steerer, stats)
+            try:  # weekly capacity re-measurement; never blocks the steering
+                await maybe_benchmark(state, result.probes)
+            except Exception:
+                pass
             if on_pass:
                 on_pass(result)
         except Exception as exc:

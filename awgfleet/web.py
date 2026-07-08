@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from .bench import apply_bench, benchmark_server
 from .clients import (
     add_client,
     move_client,
@@ -146,6 +147,8 @@ async def server_detail(name: str):
         "load": _stats.get_meta("load", {}).get(s.name),
         "users": _stats.node_users(s.name),
         "series": _stats.node_series(s.name),
+        "weight": s.weight,
+        "bench": s.bench,
     }
 
 
@@ -157,7 +160,6 @@ class ServerIn(BaseModel):
     user: str = "root"
     ssh_port: int = 22
     region: str = ""
-    weight: float = 1.0  # relative capacity: 2.0 = takes twice the clients
 
 
 @app.post("/api/servers")
@@ -175,15 +177,20 @@ async def add_server(body: ServerIn):
             ssh_password=body.password or None,
             ssh_key_path=body.key_path or None,
             region=body.region,
-            weight=body.weight if body.weight > 0 else 1.0,
         )
         try:
             await provision_server(srv, cfg)
         except Exception as exc:
             raise HTTPException(502, f"provisioning failed: {exc}")
+        try:  # measure the box so placement knows its capacity from day one
+            bench = await benchmark_server(srv)
+            if bench:
+                apply_bench(srv, bench)
+        except Exception:
+            pass  # weight stays 1.0; the weekly benchmark will catch it
         cfg.servers.append(srv)
         st.save()
-    return {"ok": True}
+    return {"ok": True, "weight": srv.weight, "bench": srv.bench}
 
 
 @app.delete("/api/servers/{name}")

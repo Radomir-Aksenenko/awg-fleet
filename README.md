@@ -40,8 +40,10 @@ domain at a different node is all it takes to send new connections there.
   the only per-client bit is the port, which is how the fleet tells them apart
   (DNS can't — a DNS query is anonymous).
 - **Capacity-weighted placement.** A new client lands on the node with the
-  fewest clients per unit of `weight` (set weight 2.0 on a box with double the
-  bandwidth and it takes twice the people), ties broken by live load.
+  fewest clients per unit of measured capacity, ties broken by live load. The
+  weight is not a knob you guess: each node's cores and real network speed are
+  benchmarked at add time and re-measured weekly (Monday 00:00 Krasnoyarsk),
+  so a gigabit box automatically takes ~10x the clients of a 100 Mbit one.
 - **One stable egress IP per client.** Wherever DNS sends a client, the
   receiving node answers them if they're pinned there and relays them to their
   node otherwise — so their sessions, logins and IP-bound state never notice a
@@ -85,6 +87,7 @@ currently published to the domain.
 |---|---|
 | `awgfleet init` | Create `state.json` with a fresh shared server identity |
 | `awgfleet server add/rm/list` | Join, drain, or list nodes |
+| `awgfleet server bench [name]` | Re-measure node capacity now and refresh weights |
 | `awgfleet client add/rm/list` | Create or revoke a client and mirror it to every node |
 | `awgfleet client move <name> <server>` | Repin a client to another node (egress IP changes to it) |
 | `awgfleet sync` | Re-push the current shared config to all nodes |
@@ -96,6 +99,12 @@ currently published to the domain.
 Placement happens once, when a client is created: they're pinned to the node
 with the fewest clients per unit of capacity weight (ties broken by live
 load), and their endpoint becomes `domain:personal-port`.
+
+The weight comes from a real benchmark, not configuration: at add time and
+weekly (Monday 00:00 Krasnoyarsk) each node's core count and actual
+up/download speed are measured (`speed.cloudflare.com` via curl, ~30s), and
+`weight = (0.7·down + 0.3·up)/100 · cpu-factor` — a plain 100 Mbit single-core
+VPS is the 1.0 baseline. A failed measurement keeps the previous weight.
 
 Each controller pass (`health_interval`, default 30s):
 

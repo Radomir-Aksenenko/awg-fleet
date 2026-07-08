@@ -144,7 +144,6 @@
       <input name="name" placeholder="name (de3)" required style="flex:0 0 110px"/>
       <input name="host" placeholder="host / IP" required class="grow"/>
       <input name="region" placeholder="region" style="flex:0 0 84px"/>
-      <input name="weight" placeholder="weight (1)" type="number" step="0.5" min="0.5" style="flex:0 0 92px" title="relative capacity: 2 takes twice the clients"/>
       <input name="password" placeholder="root password" type="password" class="grow"/>
       <button class="btn primary" type="submit">Add node</button>
     </form>
@@ -312,6 +311,8 @@ async function serverModal(name){
       <span class="k">Region</span><span>${esc(d.region)||'—'}</span>
       <span class="k">Load</span><span>${fmtLoad(d.load)}</span>
       <span class="k">Users online</span><span>${d.users}</span>
+      <span class="k">Capacity weight</span><span>${d.weight??1}</span>
+      <span class="k">Measured</span><span>${d.bench&&d.bench.at?esc(d.bench.cores+' cores · ↓'+d.bench.down_mbps+' / ↑'+d.bench.up_mbps+' Mbit')+' <span class="muted">('+ago(Math.floor(new Date(d.bench.at).getTime()/1000))+')</span>':'<span class="muted">not yet (weekly, Mon 00:00 KRSK)</span>'}</span>
     </div>
     <div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Users on this node · last 6h</div>
     <svg class="chart" viewBox="0 0 600 110" preserveAspectRatio="none">${lineChart(d.series,600,110,'var(--blue)')}</svg>`);
@@ -319,7 +320,7 @@ async function serverModal(name){
 
 // ---- forms ----
 $('#addServer').onsubmit=async e=>{e.preventDefault();const f=e.target,b=f.querySelector('button');
-  const body={name:f.name.value.trim(),host:f.host.value.trim(),region:f.region.value.trim(),password:f.password.value,weight:parseFloat(f.weight.value)||1};
+  const body={name:f.name.value.trim(),host:f.host.value.trim(),region:f.region.value.trim(),password:f.password.value};
   b.disabled=true;b.innerHTML='<span class="spin"></span> provisioning…';
   try{await api('POST','/api/servers',body);f.reset();toast('node '+body.name+' added');await refresh()}
   catch(err){toast(err.message,true)}finally{b.disabled=false;b.textContent='Add node'}};

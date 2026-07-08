@@ -19,7 +19,9 @@ client's personal endpoint port, and that is enough to steer them.
 
 - the shared server keypair and obfuscation parameters (`Jc/Jmin/Jmax/S1/S2/H1..H4`);
 - the tunnel subnet, MTU, listen port, DNS;
-- the list of nodes (host + SSH credentials + region + capacity weight);
+- the list of nodes (host + SSH credentials + region + measured capacity:
+  cores, up/down Mbit and the weight derived from them — refreshed at add time
+  and weekly, Monday 00:00 Krasnoyarsk; see `bench.py`);
 - the list of clients (keypair + allocated `/32` + pinned node + personal port).
 
 Address allocation is deterministic: the gateway takes the first host of the
@@ -38,6 +40,7 @@ subnet, clients take the lowest free `/32` after it.
 | `clients.py` | Allocate address, add/remove client, emit `.conf` / QR / link |
 | `cloudflare.py` | Reconcile the domain's A records to a target IP set |
 | `health.py` | TCP liveness and normalized load probes |
+| `bench.py` | Node capacity benchmark (cores + network speed) -> placement weight |
 | `controller.py` | Rotation policy and the reconcile loop |
 | `cli.py` | The `awgfleet` command line |
 

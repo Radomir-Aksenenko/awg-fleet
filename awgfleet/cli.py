@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import typer
 
 from . import __version__
+from .bench import apply_bench, benchmark_server
 from .clients import add_client, move_client, pick_node, remove_client, write_client_bundle
 from .cloudflare import Cloudflare
 from .controller import ReconcileResult, Steerer, reconcile_once, run_controller
@@ -95,9 +96,8 @@ def server_add(
     user: str = typer.Option("root"),
     ssh_port: int = typer.Option(22),
     region: str = typer.Option(""),
-    weight: float = typer.Option(1.0, help="Relative capacity: 2.0 takes twice the clients"),
 ):
-    """Add a node, install AmneziaWG on it and push the shared config."""
+    """Add a node, install AmneziaWG on it, push the config, measure capacity."""
     st, cfg = _load()
     if any(s.name == name for s in cfg.servers):
         typer.secho(f"server {name!r} already exists", fg="red")
@@ -105,10 +105,22 @@ def server_add(
     srv = Server(
         name=name, host=host, ssh_user=user, ssh_port=ssh_port,
         ssh_password=password, ssh_key_path=key, region=region,
-        weight=weight if weight > 0 else 1.0,
     )
     typer.echo(f"provisioning {name} ({host}) ...")
     asyncio.run(provision_server(srv, cfg))
+    typer.echo("benchmarking hardware and network (~30s) ...")
+    try:
+        bench = asyncio.run(benchmark_server(srv))
+    except Exception:
+        bench = None
+    if bench:
+        apply_bench(srv, bench)
+        typer.echo(
+            f"  {bench['cores']} cores, ↓{bench['down_mbps']} / ↑{bench['up_mbps']} Mbit "
+            f"-> weight {srv.weight}"
+        )
+    else:
+        typer.secho("  ! benchmark failed; weight stays 1.0 (weekly run will retry)", fg="yellow")
     cfg.servers.append(srv)
     st.save()
     typer.secho(f"ok {name} joined the fleet", fg="green")
@@ -140,7 +152,36 @@ def server_list():
         return
     for s in cfg.servers:
         flag = "" if s.enabled else " [disabled]"
-        typer.echo(f"  {s.name:12} {s.host:16} {s.region or '-':6}{flag}")
+        b = s.bench
+        spec = f"{b['cores']}c ↓{b['down_mbps']}Mbit" if b else "unmeasured"
+        typer.echo(f"  {s.name:12} {s.host:16} {s.region or '-':6} w={s.weight:<6} {spec}{flag}")
+
+
+@server_app.command("bench")
+def server_bench(name: str = typer.Argument(None, help="Node to re-measure (default: all)")):
+    """Re-measure node capacity (hardware + network) now and refresh weights."""
+    st, cfg = _load()
+    targets = [s for s in cfg.servers if name is None or s.name == name]
+    if not targets:
+        typer.secho(f"no server {name!r}", fg="red")
+        raise typer.Exit(1)
+
+    async def _bench_all():
+        return await asyncio.gather(
+            *(benchmark_server(s) for s in targets), return_exceptions=True
+        )
+
+    typer.echo(f"benchmarking {len(targets)} node(s), ~30s ...")
+    for s, bench in zip(targets, asyncio.run(_bench_all())):
+        if isinstance(bench, Exception) or bench is None:
+            typer.secho(f"  ! {s.name}: benchmark failed, weight kept at {s.weight}", fg="yellow")
+            continue
+        apply_bench(s, bench)
+        typer.echo(
+            f"  ok {s.name}: {bench['cores']} cores, "
+            f"↓{bench['down_mbps']} / ↑{bench['up_mbps']} Mbit -> weight {s.weight}"
+        )
+    st.save()
 
 
 @app.command()

@@ -24,9 +24,13 @@ class Server:
     # the best reachability (e.g. one IP is throttled on some mobile carrier)
     # while keeping the others as failover.
     priority: int = 0
-    # Relative capacity for client placement: a box with double the bandwidth /
-    # cores gets weight 2.0 and is assigned twice the clients.
+    # Relative capacity for client placement: weight 2.0 takes twice the
+    # clients. Computed from the node's measured hardware/network (see
+    # bench.py) at add time and weekly; 1.0 until the first benchmark lands.
     weight: float = 1.0
+    # Last benchmark record: {cores, down_mbps, up_mbps, at}. Empty = never
+    # measured (weight stays at its default until the controller gets to it).
+    bench: dict = field(default_factory=dict)
 
 
 @dataclass
