@@ -90,6 +90,25 @@ def add_client(
     return client
 
 
+def move_client(cfg: FleetConfig, name: str, node_host: str) -> tuple[Client, bool]:
+    """Repin a client to another node. The port is the client's identity and it
+    never changes, so for an already-pinned client this is config-transparent:
+    only the steering target moves, their issued .conf keeps working (their
+    egress IP becomes the new node's on the next handshake). Pinning a legacy
+    client mints their personal port, which their old config doesn't carry —
+    the returned flag says a re-issue is needed for the pin to take effect."""
+    if not any(s.host == node_host for s in cfg.servers):
+        raise KeyError(f"no server with host {node_host!r}")
+    client = next((c for c in cfg.clients if c.name == name), None)
+    if client is None:
+        raise KeyError(f"no client named {name!r}")
+    needs_reissue = client.port == 0
+    client.node_host = node_host
+    if not client.port:
+        client.port = allocate_port(cfg, client.address)
+    return client, needs_reissue
+
+
 def remove_client(cfg: FleetConfig, name: str) -> Client:
     for i, c in enumerate(cfg.clients):
         if c.name == name:

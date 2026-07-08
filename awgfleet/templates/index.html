@@ -246,6 +246,13 @@ async function clientModal(name){
         <span class="k">Last seen</span><span>${ago(d.last_seen)}</span>
         <span class="k">Favourite node</span><span>${esc(d.favorite)||'—'}</span>
         <span class="k">Address</span><span class="mono">${esc(d.address)}</span>
+        <span class="k">Home node</span><span style="display:flex;gap:6px;align-items:center">
+          <select id="cnode" class="grow" style="max-width:160px">
+            ${d.node?'':'<option value="" selected>— domain only —</option>'}
+            ${(d.servers||[]).map(s=>`<option value="${esc(s)}" ${s===d.node?'selected':''}>${esc(s)}</option>`).join('')}
+          </select>
+          <button class="btn" onclick="moveClient('${esc(name)}')">Move</button>
+        </span>
       </div>
       <div class="k muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Time on each node</div>
       <div class="srvbars">${bars}</div>
@@ -286,6 +293,15 @@ async function loadVpnSeries(name){
 function cTab(btn,which){document.querySelectorAll('#modal .tab').forEach(t=>t.classList.remove('on'));btn.classList.add('on');
   $('#cstats').style.display=which==='stats'?'':'none';$('#cawg').style.display=which==='awg'?'':'none';$('#cvpn').style.display=which==='vpn'?'':'none'}
 async function copyText(id){try{await navigator.clipboard.writeText($('#'+id).textContent);toast('copied')}catch(e){toast('copy failed',true)}}
+async function moveClient(name){
+  const node=$('#cnode').value;
+  if(!node){toast('pick a server',true);return}
+  try{
+    const r=await api('POST','/api/clients/'+encodeURIComponent(name)+'/node',{node});
+    toast(r.reissue?'moved to '+node+' — re-issue the config (old one has no personal port)':'moved to '+node);
+    await refresh();clientModal(name);
+  }catch(e){toast(e.message,true)}
+}
 
 async function serverModal(name){
   openModal(name,'<div class="muted">loading…</div>');

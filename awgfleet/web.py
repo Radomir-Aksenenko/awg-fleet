@@ -16,7 +16,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from .clients import add_client, pick_node, qr_png, remove_client, vpn_qr_series, vpn_uri
+from .clients import (
+    add_client,
+    move_client,
+    pick_node,
+    qr_png,
+    remove_client,
+    vpn_qr_series,
+    vpn_uri,
+)
 from .models import Server
 from .provision import provision_server, push_config, teardown_server
 from .render import render_client_conf
@@ -113,7 +121,16 @@ async def client_detail(name: str):
     cfg = _load().config
     c = _find_client(cfg, name)
     d = _stats.client_detail(c.public_key)
-    return {"name": c.name, "address": c.address, "created_at": c.created_at, **d}
+    name_by_host = {s.host: s.name for s in cfg.servers}
+    return {
+        "name": c.name,
+        "address": c.address,
+        "created_at": c.created_at,
+        "node": name_by_host.get(c.node_host, "") if c.node_host else "",
+        "port": c.port,
+        "servers": [s.name for s in cfg.servers],
+        **d,
+    }
 
 
 @app.get("/api/servers/{name}/detail")
@@ -227,6 +244,30 @@ async def create_client(body: ClientIn):
         warnings = await _sync_all(cfg)
         st.save()
     return {"ok": True, "warnings": warnings, "node": node}
+
+
+class MoveIn(BaseModel):
+    node: str  # server *name* to pin the client to
+
+
+@app.post("/api/clients/{name}/node")
+async def repin_client(name: str, body: MoveIn):
+    """Move a client's home node. Their port (identity) is stable, so a pinned
+    client's issued config keeps working — only the steering target changes.
+    Pinning a legacy client needs one config re-issue (flagged in the reply)."""
+    async with _lock:
+        st = _load()
+        cfg = st.config
+        srv = next((s for s in cfg.servers if s.name == body.node), None)
+        if not srv:
+            raise HTTPException(404, "no such server")
+        try:
+            _, reissue = move_client(cfg, name, srv.host)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc))
+        warnings = await _sync_all(cfg)
+        st.save()
+    return {"ok": True, "warnings": warnings, "reissue": reissue}
 
 
 @app.delete("/api/clients/{name}")

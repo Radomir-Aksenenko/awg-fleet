@@ -86,6 +86,7 @@ currently published to the domain.
 | `awgfleet init` | Create `state.json` with a fresh shared server identity |
 | `awgfleet server add/rm/list` | Join, drain, or list nodes |
 | `awgfleet client add/rm/list` | Create or revoke a client and mirror it to every node |
+| `awgfleet client move <name> <server>` | Repin a client to another node (egress IP changes to it) |
 | `awgfleet sync` | Re-push the current shared config to all nodes |
 | `awgfleet status` | Probe the fleet and show the current rotation |
 | `awgfleet run` | Run the steering controller loop |

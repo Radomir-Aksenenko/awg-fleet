@@ -2,7 +2,9 @@
 always egressing from the client's own node — relayed there by whichever node
 receives it, failed over only while that node is down."""
 
-from awgfleet.clients import add_client, allocate_port, pick_node
+import pytest
+
+from awgfleet.clients import add_client, allocate_port, move_client, pick_node
 from awgfleet.controller import steering_targets
 from awgfleet.keys import generate_keypair, generate_obfuscation
 from awgfleet.models import FleetConfig, Server
@@ -100,6 +102,35 @@ def test_targets_follow_the_pin_and_fail_over_only_when_it_dies():
     assert failed == {a.port: "2.2.2.2", b.port: "2.2.2.2"}
     # node a recovers: the client is pointed home again (stable IP long-term)
     assert steering_targets(cfg, {"1.1.1.1", "2.2.2.2"}, score) == both
+
+
+def test_moving_a_pinned_client_keeps_their_port():
+    cfg = _cfg()
+    c = add_client(cfg, "phone", node_host="1.1.1.1")
+    port = c.port
+    moved, reissue = move_client(cfg, "phone", "2.2.2.2")
+    # the port is the identity: it survives the move, so the issued config
+    # keeps working and only the steering target (egress IP) changes
+    assert moved.node_host == "2.2.2.2" and moved.port == port
+    assert reissue is False
+    assert steering_targets(cfg, {"1.1.1.1", "2.2.2.2"}, lambda h: 0.0) == {port: "2.2.2.2"}
+
+
+def test_pinning_a_legacy_client_mints_a_port_and_flags_reissue():
+    cfg = _cfg()
+    add_client(cfg, "old")  # legacy: no pin, no port
+    moved, reissue = move_client(cfg, "old", "1.1.1.1")
+    assert moved.port == cfg.steer_port_base + 2
+    assert reissue is True  # their old config has no personal port in it
+
+
+def test_moving_to_an_unknown_server_or_client_fails():
+    cfg = _cfg()
+    add_client(cfg, "phone", node_host="1.1.1.1")
+    with pytest.raises(KeyError):
+        move_client(cfg, "phone", "9.9.9.9")
+    with pytest.raises(KeyError):
+        move_client(cfg, "ghost", "1.1.1.1")
 
 
 def test_legacy_clients_are_left_out_of_steering():

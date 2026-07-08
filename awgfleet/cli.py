@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import typer
 
 from . import __version__
-from .clients import add_client, pick_node, remove_client, write_client_bundle
+from .clients import add_client, move_client, pick_node, remove_client, write_client_bundle
 from .cloudflare import Cloudflare
 from .controller import ReconcileResult, Steerer, reconcile_once, run_controller
 from .stats import StatsDB
@@ -178,6 +178,34 @@ def client_add(
     for kind, path in files.items():
         typer.echo(f"    {kind:5} {path}")
     typer.echo("    import the .conf or scan the QR in the AmneziaWG / AmneziaVPN app")
+
+
+@client_app.command("move")
+def client_move(
+    name: str = typer.Argument(..., help="Client to move"),
+    server: str = typer.Argument(..., help="Server name to pin the client to"),
+):
+    """Pin a client to another node (their traffic will egress from its IP)."""
+    st, cfg = _load()
+    srv = next((s for s in cfg.servers if s.name == server), None)
+    if not srv:
+        typer.secho(f"no server {server!r}", fg="red")
+        raise typer.Exit(1)
+    try:
+        client, reissue = move_client(cfg, name, srv.host)
+    except KeyError as exc:
+        typer.secho(str(exc), fg="red")
+        raise typer.Exit(1)
+    typer.echo(f"moving {name} -> {server}; syncing nodes ...")
+    asyncio.run(_sync_all(cfg))
+    st.save()
+    typer.secho(f"ok {name} pinned to {server} (port {client.port})", fg="green")
+    if reissue:
+        typer.secho(
+            "  ! this client was on the plain domain; re-issue their config "
+            "(the old one has no personal port, so the pin can't apply to it)",
+            fg="yellow",
+        )
 
 
 @client_app.command("rm")
