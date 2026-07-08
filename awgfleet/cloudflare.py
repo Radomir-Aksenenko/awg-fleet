@@ -1,10 +1,11 @@
 """Cloudflare DNS steering.
 
-The fleet endpoint (e.g. vpn.example.com) is a set of plain A records, one per
-node currently in rotation. Reconciling that set is the whole steering story:
-drop a node that is down or overloaded, add it back when it recovers. Records
-are grey-clouded (proxied=False) on purpose — WireGuard is UDP and the client
-must reach the node directly, not through Cloudflare's HTTP proxy.
+The fleet endpoint (e.g. vpn.example.com) is a single plain A record pointing
+at whichever node the controller wants new connections on. Reconciling it is
+the whole steering story: move it when a lighter node exists, replace it when
+the node dies. Records are grey-clouded (proxied=False) on purpose — WireGuard
+is UDP and the client must reach the node directly, not through Cloudflare's
+HTTP proxy.
 """
 
 from __future__ import annotations
@@ -40,6 +41,24 @@ class Cloudflare:
             f"/zones/{zone_id}/dns_records",
             params={"type": "A", "name": name, "per_page": 100},
         )
+
+    def list_zone_a_records(self, zone_id: str) -> list[dict]:
+        """Every A record in the zone, paginated (used to sweep up leftovers)."""
+        records: list[dict] = []
+        page = 1
+        while True:
+            batch = self._req(
+                "GET",
+                f"/zones/{zone_id}/dns_records",
+                params={"type": "A", "per_page": 100, "page": page},
+            )
+            records.extend(batch)
+            if len(batch) < 100:
+                return records
+            page += 1
+
+    def delete_record(self, zone_id: str, record_id: str) -> None:
+        self._req("DELETE", f"/zones/{zone_id}/dns_records/{record_id}")
 
     def reconcile_a_records(
         self, zone_id: str, name: str, ips: list[str], ttl: int = 60

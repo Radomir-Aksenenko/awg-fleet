@@ -1,3 +1,5 @@
+import time
+
 from awgfleet.controller import Steerer
 from awgfleet.health import Probe
 from awgfleet.models import FleetConfig, Server
@@ -19,7 +21,7 @@ def _settle(steerer, cfg, probes, passes=3):
 
 
 def test_lightest_node_becomes_primary():
-    # active-passive: exactly one IP in DNS, the lighter node
+    # exactly one IP in DNS: the least-loaded node, where new handshakes land
     probes = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
     assert _settle(Steerer(), _cfg(), probes) == ["1.1.1.1"]
 
@@ -27,7 +29,7 @@ def test_lightest_node_becomes_primary():
 def test_only_one_ip_is_published():
     probes = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.6)]
     out = _settle(Steerer(), _cfg(), probes, passes=5)
-    assert out == ["1.1.1.1"]  # standby held in reserve, not round-robined
+    assert out == ["1.1.1.1"]  # heavier node held in reserve, never co-published
 
 
 def test_three_nodes_still_single_primary():
@@ -44,9 +46,34 @@ def test_primary_is_sticky_under_small_load_changes():
     s, cfg = Steerer(), _cfg()
     p = [Probe(_srv("a", "1.1.1.1"), True, 0.2), Probe(_srv("b", "2.2.2.2"), True, 0.1)]
     assert _settle(s, cfg, p, 3) == ["2.2.2.2"]  # b lighter -> primary
-    # a is now the lighter one, but b is nowhere near overloaded: do NOT bounce
+    # a edges slightly below b: within the rebalance gap, so do NOT bounce
     p2 = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.2)]
     assert _settle(s, cfg, p2, 3) == ["2.2.2.2"]
+
+
+def test_record_moves_to_a_clearly_lighter_node():
+    s, cfg = Steerer(), _cfg()
+    p = [Probe(_srv("a", "1.1.1.1"), True, 0.1), Probe(_srv("b", "2.2.2.2"), True, 0.5)]
+    assert _settle(s, cfg, p, 3) == ["1.1.1.1"]
+    # the load picture inverts well past the gap: new connections should go to b
+    # now ("today node A, tomorrow node B") even though a is far from overloaded
+    p2 = [Probe(_srv("a", "1.1.1.1"), True, 0.5), Probe(_srv("b", "2.2.2.2"), True, 0.1)]
+    assert _settle(s, cfg, p2, 6) == ["2.2.2.2"]
+
+
+def test_users_piling_onto_the_published_node_shift_the_record():
+    s, cfg = Steerer(), _cfg()
+    idle = [Probe(_srv("a", "1.1.1.1"), True, 0.0), Probe(_srv("b", "2.2.2.2"), True, 0.0)]
+    assert _settle(s, cfg, idle, 3) == ["1.1.1.1"]  # tie -> first node published
+    # 10 clients connect to the published node (CPU stays flat): the user count
+    # alone tips the score past the gap and the record moves to the empty node
+    now = int(time.time())
+    peers = {f"k{i}": {"rx": 0, "tx": 0, "handshake": now - 5} for i in range(10)}
+    busy = [
+        Probe(_srv("a", "1.1.1.1"), True, 0.0, peers),
+        Probe(_srv("b", "2.2.2.2"), True, 0.0),
+    ]
+    assert _settle(s, cfg, busy, 3) == ["2.2.2.2"]
 
 
 def test_primary_sheds_when_overloaded():

@@ -16,10 +16,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from .clients import add_client, pick_home_host, qr_png, remove_client, vpn_qr_series, vpn_uri
+from .clients import add_client, qr_png, remove_client, vpn_qr_series, vpn_uri
 from .models import Server
 from .provision import provision_server, push_config, teardown_server
-from .render import client_endpoint_host, render_client_conf
+from .render import render_client_conf
 from .state import DEFAULT_STATE_PATH, State
 from .stats import StatsDB
 
@@ -53,10 +53,6 @@ async def status():
     rotation = _stats.get_meta("rotation", [])
     load = _stats.get_meta("load", {})
     alive = _stats.get_meta("alive", {})
-    assigned: dict[str, int] = {}
-    for c in cfg.clients:
-        if c.home_host:
-            assigned[c.home_host] = assigned.get(c.home_host, 0) + 1
     servers = []
     for s in cfg.servers:
         servers.append(
@@ -68,10 +64,8 @@ async def status():
                 "load": load.get(s.name),
                 "in_rotation": s.name in rotation,
                 "users": _stats.node_users(s.name),
-                "assigned": assigned.get(s.host, 0),
             }
         )
-    host_to_name = {s.host: s.name for s in cfg.servers}
     clients = []
     online = 0
     for c in cfg.clients:
@@ -88,7 +82,6 @@ async def status():
                 "tx": d["tx"],
                 "last_seen": d["last_seen"],
                 "favorite": d["favorite"],
-                "home": host_to_name.get(c.home_host, "") if c.home_host else "",
             }
         )
     return {
@@ -195,51 +188,22 @@ async def _sync_all(cfg) -> list[str]:
     return [f"{s.name}: {r}" for s, r in zip(targets, results) if isinstance(r, Exception)]
 
 
-def _host_metrics(cfg):
-    """Live load / alive keyed by host (the stats DB keys by node name)."""
-    load = _stats.get_meta("load", {})
-    alive = _stats.get_meta("alive", {})
-    by_name = {s.name: s.host for s in cfg.servers}
-    load_by_host = {by_name[n]: v for n, v in load.items() if n in by_name}
-    alive_by_host = {by_name[n]: v for n, v in alive.items() if n in by_name}
-    return load_by_host, alive_by_host
-
-
-def _steer_record(cfg, client, ips: list[str]) -> None:
-    """Point (or clear) a client's steering subdomain. Best effort: if Cloudflare
-    isn't reachable the controller will reconcile it on its next pass anyway."""
-    if not client.home_host:
-        return
-    try:
-        from .cloudflare import Cloudflare
-
-        Cloudflare().reconcile_a_records(
-            cfg.cf_zone_id, client_endpoint_host(cfg, client), ips, ttl=60
-        )
-    except Exception:
-        pass
-
-
 @app.post("/api/clients")
 async def create_client(body: ClientIn):
     async with _lock:
         st = _load()
         cfg = st.config
-        load_by_host, alive_by_host = _host_metrics(cfg)
-        home = pick_home_host(cfg, load_by_host, alive_by_host)
         try:
-            client = add_client(
+            add_client(
                 cfg,
                 body.name,
                 created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                home_host=home,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
         warnings = await _sync_all(cfg)
         st.save()
-        _steer_record(cfg, client, [home] if home else [])
-    return {"ok": True, "warnings": warnings, "home": home}
+    return {"ok": True, "warnings": warnings}
 
 
 @app.delete("/api/clients/{name}")
@@ -248,12 +212,11 @@ async def delete_client(name: str):
         st = _load()
         cfg = st.config
         try:
-            gone = remove_client(cfg, name)
+            remove_client(cfg, name)
         except KeyError:
             raise HTTPException(404, "no such client")
         warnings = await _sync_all(cfg)
         st.save()
-        _steer_record(cfg, gone, [])  # drop its steering subdomain
     return {"ok": True, "warnings": warnings}
 
 

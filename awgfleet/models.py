@@ -37,11 +37,6 @@ class Client:
     address: str  # e.g. "10.8.0.2/32"
     preshared_key: Optional[str] = None
     created_at: str = ""
-    # Home node for load distribution. When set, this client's config points at
-    # its own steering subdomain (nX.<domain>) which the controller keeps on this
-    # node and fails over to a live one. Empty = legacy client on the shared
-    # domain (active-passive), left untouched so it needs no re-import.
-    home_host: str = ""
 
 
 @dataclass
