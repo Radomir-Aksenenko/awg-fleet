@@ -94,7 +94,10 @@ def test_targets_follow_the_pin_and_fail_over_only_when_it_dies():
     cfg = _cfg()
     a = add_client(cfg, "on-a", node_host="1.1.1.1")
     b = add_client(cfg, "on-b", node_host="2.2.2.2")
-    score = lambda h: 0.0
+
+    def score(host):
+        return 0.0
+
     both = steering_targets(cfg, {"1.1.1.1", "2.2.2.2"}, score)
     assert both == {a.port: "1.1.1.1", b.port: "2.2.2.2"}
     # node a dies: only its client is repointed, the other stays home
@@ -140,7 +143,9 @@ def test_legacy_clients_are_left_out_of_steering():
 
 
 def test_vpn_blob_carries_the_personal_port():
-    import base64, json, struct, zlib
+    import base64
+    import json
+    import zlib
 
     from awgfleet.clients import vpn_uri
 
