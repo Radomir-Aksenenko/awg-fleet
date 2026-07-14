@@ -1,0 +1,103 @@
+name: Cloudflare Access administration
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete:
+        description: Delete the exact Access application for panel.megatntmega.ru
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-or-delete:
+    name: Inspect or delete panel Access application
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DELETE_APPLICATION: ${{ inputs.delete }}
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_HOST"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Inspect exact Access application
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "root@${DEPLOY_HOST}" \
+            "DELETE_APPLICATION='${DELETE_APPLICATION}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          set -a
+          . /opt/awg-fleet/.env
+          set +a
+
+          : "${CF_API_TOKEN:?CF_API_TOKEN is not configured on the server}"
+          ACCOUNT_ID='1a5f79853b9b2f731023eb52e0966966'
+          TARGET_DOMAIN='panel.megatntmega.ru'
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          curl --silent --show-error --fail-with-body \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/apps" \
+            > "$response_file"
+
+          app_id="$(python3 - "$response_file" "$TARGET_DOMAIN" <<'PY'
+          import json
+          import sys
+
+          response_path, target = sys.argv[1:]
+          with open(response_path, encoding="utf-8") as handle:
+              response = json.load(handle)
+
+          if not response.get("success"):
+              errors = response.get("errors") or [{"message": "unknown Cloudflare API error"}]
+              raise SystemExit("Cloudflare API rejected the request: " + "; ".join(str(item.get("message", item)) for item in errors))
+
+          matches = []
+          for app in response.get("result", []):
+              domains = []
+              for key in ("domain", "self_hosted_domains"):
+                  value = app.get(key)
+                  if isinstance(value, str):
+                      domains.append(value)
+                  elif isinstance(value, list):
+                      domains.extend(item for item in value if isinstance(item, str))
+              if target in domains:
+                  matches.append((app.get("id"), app.get("name"), domains))
+
+          if len(matches) != 1:
+              raise SystemExit(f"Expected exactly one Access application for {target}; found {len(matches)}")
+
+          app_id, name, domains = matches[0]
+          if not app_id:
+              raise SystemExit("Matching Access application has no id")
+          print(f"Matched Access application: id={app_id} name={name!r} domains={domains}", file=sys.stderr)
+          print(app_id)
+          PY
+          )"
+
+          if [ "$DELETE_APPLICATION" = 'true' ]; then
+            curl --silent --show-error --fail-with-body --request DELETE \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/apps/${app_id}" \
+              | python3 -c 'import json, sys; response = json.load(sys.stdin); assert response.get("success"), response; print("Deleted the exact Access application for panel.megatntmega.ru")'
+          else
+            echo 'Inspection complete. Re-run with delete=true only to remove the matched application.'
+          fi
+          REMOTE
