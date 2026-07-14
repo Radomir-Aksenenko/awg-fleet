@@ -94,6 +94,24 @@ currently published to the domain.
 | `awgfleet status` | Probe the fleet and show the current rotation |
 | `awgfleet run` | Run the steering controller loop |
 
+## Panel authentication
+
+The web panel authenticates itself; Cloudflare Tunnel only transports HTTPS to
+the localhost-bound service. Set these environment variables for
+`awg-fleet-web.service` before exposing the panel:
+
+```ini
+PANEL_USERNAME=admin
+PANEL_PASSWORD=<long-random-password>
+PANEL_SESSION_SECRET=<at-least-32-random-characters>
+```
+
+Sessions are signed, HTTPS-only, HTTP-only cookies and expire after 12 hours.
+The deployment workflow reads these values from the `PANEL_USERNAME`, `PANEL_PASSWORD`, and
+`PANEL_SESSION_SECRET` GitHub Actions secrets and writes `/etc/awg-fleet/web.env`
+with mode `0600` on the fleet host. If any value is missing, the panel fails
+closed with HTTP 503 rather than exposing its API.
+
 ## How steering decides
 
 Placement happens once, when a client is created: they're pinned to the node

@@ -25,20 +25,44 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          PANEL_USERNAME: ${{ secrets.PANEL_USERNAME }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          PANEL_SESSION_SECRET: ${{ secrets.PANEL_SESSION_SECRET }}
         run: |
           set -euo pipefail
+          test -n "$PANEL_USERNAME"
+          test -n "$PANEL_PASSWORD"
+          test "${#PANEL_SESSION_SECRET}" -ge 32
           mkdir -p ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/id_ed25519 "root@${DEPLOY_HOST}" bash -s <<'REMOTE'
+          PANEL_USERNAME_B64=$(printf %s "$PANEL_USERNAME" | base64 -w0)
+          PANEL_PASSWORD_B64=$(printf %s "$PANEL_PASSWORD" | base64 -w0)
+          PANEL_SESSION_SECRET_B64=$(printf %s "$PANEL_SESSION_SECRET" | base64 -w0)
+          ssh -i ~/.ssh/id_ed25519 \
+            "root@${DEPLOY_HOST}" \
+            "PANEL_USERNAME_B64=$PANEL_USERNAME_B64 PANEL_PASSWORD_B64=$PANEL_PASSWORD_B64 PANEL_SESSION_SECRET_B64=$PANEL_SESSION_SECRET_B64 bash -s" <<'REMOTE'
             set -e
+            install -d -m 700 /etc/awg-fleet
+            umask 077
+            {
+              printf 'PANEL_USERNAME=%s\n' "$(printf %s "$PANEL_USERNAME_B64" | base64 -d)"
+              printf 'PANEL_PASSWORD=%s\n' "$(printf %s "$PANEL_PASSWORD_B64" | base64 -d)"
+              printf 'PANEL_SESSION_SECRET=%s\n' "$(printf %s "$PANEL_SESSION_SECRET_B64" | base64 -d)"
+            } > /etc/awg-fleet/web.env
+            install -d -m 755 /etc/systemd/system/awg-fleet-web.service.d
+            printf '[Service]\nEnvironmentFile=/etc/awg-fleet/web.env\n' \
+              > /etc/systemd/system/awg-fleet-web.service.d/auth.conf
+            systemctl daemon-reload
             cd /opt/awg-fleet
             git pull --ff-only
             .venv/bin/pip install -q -e .
             systemctl restart awg-fleet
-            systemctl restart awg-fleet-web 2>/dev/null || true
+            systemctl restart awg-fleet-web
             sleep 3
             systemctl is-active awg-fleet
+            systemctl is-active awg-fleet-web
+            test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/session)" = 401
             echo "deployed $(git rev-parse --short HEAD)"
           REMOTE

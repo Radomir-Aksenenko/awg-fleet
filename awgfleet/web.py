@@ -1,19 +1,25 @@
 """Web panel for awg-fleet: manage nodes and clients, watch live metrics.
 
-Binds to localhost and expects to sit behind a tunnel + access proxy, so it
-carries no auth of its own. Live rotation and per-node load come from the
-metrics DB that the controller writes each pass, so the panel stays fast and
-never has to SSH on a page refresh; only mutations touch the nodes.
+The panel binds to localhost behind Cloudflare Tunnel, but authenticates its own
+administrator with a signed, HTTPS-only session cookie. It fails closed if the
+required credentials are absent, so removing an external access proxy cannot
+accidentally expose the fleet controls.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
+import os
+import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 from .bench import apply_bench, benchmark_server
@@ -36,6 +42,98 @@ app = FastAPI(title="awg-fleet", docs_url=None, redoc_url=None)
 _lock = asyncio.Lock()
 _TEMPLATES = Path(__file__).parent / "templates"
 _stats = StatsDB()
+_SESSION_COOKIE = "__Host-awg-fleet-session"
+_SESSION_TTL_SECONDS = 12 * 60 * 60
+_PUBLIC_PATHS = {"/login", "/api/login", "/healthz"}
+
+
+def _panel_auth() -> tuple[str, str, bytes] | None:
+    """Read credentials lazily so the process can be configured through systemd.
+
+    A missing or weak session secret returns ``None``; the middleware then fails
+    closed instead of serving the panel without authentication.
+    """
+    username = os.getenv("PANEL_USERNAME", "")
+    password = os.getenv("PANEL_PASSWORD", "")
+    secret = os.getenv("PANEL_SESSION_SECRET", "")
+    if not username or not password or len(secret) < 32:
+        return None
+    return username, password, secret.encode("utf-8")
+
+
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _unb64(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _new_session(username: str, secret_key: bytes) -> str:
+    expires = int(time.time()) + _SESSION_TTL_SECONDS
+    payload = f"{username}\n{expires}\n{secrets.token_urlsafe(18)}".encode("utf-8")
+    signature = hmac.new(secret_key, payload, hashlib.sha256).digest()
+    return f"{_b64(payload)}.{_b64(signature)}"
+
+
+def _session_user(token: str | None, auth: tuple[str, str, bytes] | None) -> str | None:
+    if not token or not auth:
+        return None
+    username, _, secret_key = auth
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        payload = _unb64(encoded_payload)
+        signature = _unb64(encoded_signature)
+        expected = hmac.new(secret_key, payload, hashlib.sha256).digest()
+        token_user, expires, _ = payload.decode("utf-8").split("\n", 2)
+        if int(expires) < time.time() or token_user != username:
+            return None
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+    return token_user if hmac.compare_digest(signature, expected) else None
+
+
+def _auth_required(request: Request) -> Response:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+@app.middleware("http")
+async def require_panel_login(request: Request, call_next):
+    """Protect every panel route except login and a no-detail health probe."""
+    if request.url.path not in _PUBLIC_PATHS:
+        auth = _panel_auth()
+        if auth is None:
+            return JSONResponse(
+                {"detail": "panel authentication is not configured"}, status_code=503
+            )
+        if not _session_user(request.cookies.get(_SESSION_COOKIE), auth):
+            return _auth_required(request)
+
+    response = await call_next(request)
+    response.headers.setdefault("Cache-Control", "no-store")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
+
+_LOGIN_PAGE = """<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вход · awg-fleet</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0c0e11;color:#e8ebef;font:15px/1.5 system-ui,sans-serif}
+main{width:min(360px,calc(100% - 32px));background:#14171c;border:1px solid #262b33;border-radius:12px;padding:28px}
+h1{margin:0 0 6px;font-size:22px}.sub{margin:0 0 22px;color:#8b94a3}label{display:block;margin:13px 0 5px;color:#b9c0ca;font-size:13px}
+input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #343b46;border-radius:7px;background:#0c0e11;color:#e8ebef;font:inherit}
+button{width:100%;margin-top:20px;padding:10px;border:0;border-radius:7px;background:#35d0a5;color:#05201a;font:600 14px system-ui;cursor:pointer}
+#error{min-height:20px;margin-top:12px;color:#e0574c;font-size:13px}</style></head>
+<body><main><h1>awg-fleet</h1><p class="sub">Вход в панель управления</p>
+<form id="login"><label for="username">Логин</label><input id="username" autocomplete="username" required autofocus>
+<label for="password">Пароль</label><input id="password" type="password" autocomplete="current-password" required>
+<button type="submit">Войти</button><div id="error" role="alert"></div></form></main>
+<script>document.querySelector('#login').addEventListener('submit',async e=>{e.preventDefault();const error=document.querySelector('#error');error.textContent='';const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})});if(r.ok)location.assign('/');else error.textContent='Неверный логин или пароль';});</script>
+</body></html>"""
 
 
 def _load() -> State:
@@ -49,6 +147,62 @@ def _find_client(cfg, name):
     if not c:
         raise HTTPException(404, f"no client {name!r}")
     return c
+
+
+@app.get("/healthz", response_class=PlainTextResponse)
+async def healthz() -> str:
+    return "ok"
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    auth = _panel_auth()
+    if auth is None:
+        raise HTTPException(503, "panel authentication is not configured")
+    if _session_user(request.cookies.get(_SESSION_COOKIE), auth):
+        return RedirectResponse("/", status_code=303)
+    return _LOGIN_PAGE
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+async def login(body: LoginIn):
+    auth = _panel_auth()
+    if auth is None:
+        raise HTTPException(503, "panel authentication is not configured")
+    username, password, secret_key = auth
+    valid = hmac.compare_digest(body.username, username) and hmac.compare_digest(body.password, password)
+    if not valid:
+        await asyncio.sleep(0.35)  # keeps online password guessing slow without storing attempts
+        raise HTTPException(401, "invalid credentials")
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        _SESSION_COOKIE,
+        _new_session(username, secret_key),
+        max_age=_SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/logout")
+async def logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/session")
+async def session(request: Request):
+    auth = _panel_auth()
+    return {"authenticated": True, "username": _session_user(request.cookies.get(_SESSION_COOKIE), auth)}
 
 
 @app.get("/", response_class=HTMLResponse)
